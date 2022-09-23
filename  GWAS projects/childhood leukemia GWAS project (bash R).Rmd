@@ -1,0 +1,1739 @@
+---
+title: "ccls gwas"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: a GWAS of childhood leukemia
+
+
+# data preparation
+
+```{bash data preparation and Ancestry imputation}
+
+cd /ccls/home/sli/GWAS/libby/
+
+################################################################################
+# Combining CCLS caco data sets from different chromosomes to 1 file set
+for chr in {1..22}; do
+  plink --bfile /ccls/data_ccls_gwas/raw/chr"${chr}" \
+    --snps-only 'just-acgt'\
+    --make-bed \
+    --out ccls/chr"${chr}".snp
+done  
+
+find ccls/ -name "chr*.snp.bim" > ccls/forMerge_ccls.list
+sed -i 's/.bim//g' ccls/forMerge_ccls.list
+plink --merge-list ccls/forMerge_ccls.list \
+  --make-bed \
+  --out ccls/ccls.1.gwas
+
+## Remove samples failing QC due to libby's email
+plink --bfile  ccls/ccls.1.gwas \
+  --remove ccls/ccls.rmv \
+  --make-bed \
+  --out /ccls/home/sli/GWAS/libby/v2/ccls.gwas
+```
+
+# ALL GWAS with Plink
+
+```{bash ancestry imputation}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+################################################################################
+# Ancestry imputation
+
+awk '{print $1, $1":"$4":"$5":"$6, $3,$4, $5, $6}' ccls.gwas.bim > ccls.gwas.update.bim
+mv ccls.gwas.update.bim ccls.gwas.bim
+awk '{print$2}' ccls.gwas.bim > ccls_SNP.txt
+
+plink --bfile /ccls/home/sli/GWAS/ref/phase3/1kG_MDS_P3_5 \
+  --extract ccls_SNP.txt \
+  --make-bed \
+  --out 1kG_Merge1
+  
+awk '{print$2}' 1kG_Merge1.bim > 1kG_Merge1_SNPs.txt
+
+plink --bfile ccls.gwas \
+  --extract 1kG_Merge1_SNPs.txt \
+  --recode \
+  --make-bed \
+  --out ccls_MDS
+
+awk '{print$2,$4}' ccls_MDS.map > build_ccls_MDS.txt
+plink --bfile 1kG_Merge1\
+  --update-map build_ccls_MDS.txt \
+  --make-bed \
+  --out 1kG_Merge2
+
+awk '{print$2,$5}' 1kG_Merge2.bim > 1kg_ref-list.txt
+
+plink --bfile ccls_MDS \
+  --reference-allele 1kg_ref-list.txt \
+  --make-bed \
+  --out ccls_MDS-adj
+  
+awk '{print$2,$5,$6}' 1kG_Merge2.bim > 1kG_Merge2_tmp
+awk '{print$2,$5,$6}' ccls_MDS-adj.bim > ccls_MDS-adj_tmp
+sort 1kG_Merge2_tmp ccls_MDS-adj_tmp |uniq -u > all_differences.txt
+
+awk '{print$1}' all_differences.txt | sort -u > flip_list.txt
+
+plink --bfile ccls_MDS-adj\
+  --flip flip_list.txt \
+  --reference-allele 1kg_ref-list.txt \
+  --make-bed \
+  --out ccls_MDS_corrected
+
+awk '{print$2,$5,$6}' ccls_MDS_corrected.bim > ccls_MDS_corrected_tmp
+sort 1kG_Merge2_tmp ccls_MDS_corrected_tmp |uniq -u  > uncorresponding_SNPs.txt
+awk '{print$1}' uncorresponding_SNPs.txt | sort -u > SNPs_for_exlusion.txt
+
+plink --bfile ccls_MDS_corrected \
+  --exclude SNPs_for_exlusion.txt \
+  --make-bed \
+  --out ccls_MDS_2
+  
+plink --bfile 1kG_Merge2 \
+  --exclude SNPs_for_exlusion.txt \
+  --make-bed \
+  --out 1kG_Merge3
+
+plink --bfile ccls_MDS_2 \
+  --bmerge 1kG_Merge3.bed 1kG_Merge3.bim 1kG_Merge3.fam \
+  --allow-no-sex \
+  --make-bed \
+  --out ccls_1000G_1
+
+plink --bfile ccls.gwas \
+  --exclude ~/GWAS/ref/hg37/inversion_hg37.txt \
+  --range \
+  --indep-pairwise 50 5 0.2 \
+  --out indepSNP
+
+# Using a set of pruned SNPs
+plink --bfile ccls_1000G_1 \
+  --extract indepSNP.prune.in \
+  --genome \
+  --out ccls_1000G_1
+
+plink --bfile ccls_1000G_1 \
+  --read-genome ccls_1000G_1.genome \
+  --cluster \
+  --mds-plot 10 \
+  --out ccls_1000G_1
+  
+  # race file for 1000G saved at /ccls/home/sli/GWAS/ref/phase3/race_1kG_P3.txt
+
+# Create a racefile of your own data.
+awk '{print $1,$2,"OWN"}' ccls.gwas.fam > racefile_own.txt
+
+# Concatenate racefiles
+cat /ccls/home/sli/GWAS/ref/phase3/race_1kG_P3.txt racefile_own.txt | sed -e '1i\FID IID race' > racefile.txt
+
+# prepare mds and fam files 
+cp ccls_1000G_1.mds racefile.mds
+cp ccls.gwas.fam racefile.fam
+
+```
+
+```{r mds plot and fam file preparation}
+
+setwd('/ccls/home/sli/GWAS/libby/v2') 
+
+library(tidyverse)
+library(class)
+
+data<- read.table(file="racefile.mds",header=TRUE)
+race<- read.table(file="racefile.txt",header=TRUE) 
+
+#only keep unique in data
+race <- race%>%
+  distinct(IID, .keep_all=T)%>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+
+data <- data%>%
+  distinct(IID, .keep_all=T)%>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) %>%
+  dplyr::filter(IID %in% race$IID)
+
+
+datafile <- left_join(data,race,by= c("IID","FID"))  %>% na.omit() %>%
+  mutate(race = factor(race, levels =c("AFR", "AMR", "EAS", "EUR","SAS","OWN") ))
+
+
+shape_vector <- c(20, 20, 20, 20, 20, 4)
+color_vector <- c("green1","mediumblue","hotpink","red","gold","grey67")
+
+tiff("MDS1_2.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_2.pdf"))
+datafile%>%
+  ggplot(aes(C1, C2, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_3.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_3.pdf"))
+datafile%>%
+  ggplot(aes(C1, C3, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_4.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_4.pdf"))
+datafile%>%
+  ggplot(aes(C1, C4, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_5.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_5.pdf"))
+datafile%>%
+  ggplot(aes(C1, C5, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+#impute race information
+
+own_not_ind <- which(!datafile$race == "OWN")
+own_ind <- which(datafile$race == "OWN")
+
+train <-datafile[own_not_ind, c("C1","C2","C3","C4","C5","C6","C7","C8","C9","C10")]
+test <-datafile[own_ind, c("C1","C2","C3","C4","C5","C6","C7","C8","C9","C10")]
+train_results <- as.character(datafile[own_not_ind, "race"])
+test_results <- as.character(knn(train=train, test=test, cl=train_results, k=10))
+test_results_1 <- paste0(test_results,"_imp")
+
+datafile_imputed <- datafile %>% mutate(race= as.character(race))
+datafile_imputed[own_ind,"race"] <- test_results_1 
+
+datafile_imputed_1 <- datafile_imputed %>%
+  na.omit() %>%
+  mutate(race = factor(race, levels =c("AFR","AFR_imp","AMR", "AMR_imp","EAS", "EAS_imp","EUR", "EUR_imp","SAS","SAS_imp") ))
+
+shape_vector <- c(20, 2, 20, 2, 20, 2, 20, 2, 20, 2,20, 2)
+color_vector <- c("green1","green1","mediumblue","mediumblue","hotpink","hotpink","coral","coral","darkred","darkred")
+
+
+tiff("MDS1_2_imputed.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_2_imputed.pdf"))
+datafile_imputed_1%>%
+  ggplot(aes(C1, C2, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_3_imputed.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_3_imputed.pdf"))
+datafile_imputed_1%>%
+  ggplot(aes(C1, C3, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_4_imputed.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_4_imputed.pdf"))
+datafile_imputed_1%>%
+  ggplot(aes(C1, C4, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+tiff("MDS1_5_imputed.tiff",units  = "cm", width = 30, height = 15, res=300)
+#pdf(paste0(args,"_MDS1_5_imputed.pdf"))
+datafile_imputed_1%>%
+  ggplot(aes(C1, C5, group=race)) + 
+  geom_point(aes(shape=race, color=race), size=2)+
+  scale_shape_manual(values=shape_vector)+
+  scale_color_manual(values=color_vector)+
+  theme_bw()
+dev.off()
+
+# Check concordance
+library(data.table)
+setwd('/ccls/home/sli/GWAS/libby/v2') 
+
+args="ccls.v2"
+all_samples_variables <- fread("../clinical/sebastian_ccls_yrace.csv") %>%
+  select(FID, IID, Y_race) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+
+White <- which(all_samples_variables$Y_race == 1)
+Black <- which(all_samples_variables$Y_race == 2)
+Hispanic <- which(all_samples_variables$Y_race == 3)
+Asian <- which(all_samples_variables$Y_race == 4)
+Unknown <- which(all_samples_variables$Y_race == 5)
+all_samples_variables$reportrace <- NA
+all_samples_variables$reportrace[White] <- "EUR"
+all_samples_variables$reportrace[Black] <- "AFR"
+all_samples_variables$reportrace[Hispanic] <- "LAT"
+all_samples_variables$reportrace[Asian] <- "EAS"
+all_samples_variables$reportrace[Unknown] <- "Unknown"
+
+datafile_imputed_all <- datafile_imputed_1 %>%
+  select(FID,IID,race)
+datafile_imputed_2 <- inner_join(all_samples_variables,datafile_imputed_all,by=c("FID","IID")) %>%
+  select(FID,IID,reportrace,race) %>%
+  dplyr::mutate(race = as.character(race))
+table(datafile_imputed_2$reportrace,datafile_imputed_2$race)
+  #        AFR_imp AMR_imp EAS_imp EUR_imp SAS_imp
+  # AFR          44       2       0       1       0
+  # EAS           0       4      87       3      44
+  # EUR           0      32       2     592       4
+  # LAT           4    1155       4      62       2
+  # Unknown      25      80      16      74      24
+
+## Minor modification of races
+## Charleston's suggestion
+### For imputation, self-reported African-Americans, European Americans, Latinos, East Asians (minus those by clustering would be assigned to SAS), and SAS (this is by clustering).
+### For GWAS, drop the assigned SAS, stick with the self-reported ancestries (but adding in unknowns assigned)
+datafile_imputed_3 <- datafile_imputed_2 %>%
+  dplyr::rename("selfreportRace" = "reportrace",
+                "PCRace" = "race") %>%
+  dplyr::mutate(PCRace = gsub("_.*$","",PCRace)) %>%
+  dplyr::mutate(GWASRace = selfreportRace,
+                imputeRace =selfreportRace )
+
+table(datafile_imputed_3$selfreportRace)
+
+EAS_pcSAS <-which(datafile_imputed_3$PCRace=="SAS" & datafile_imputed_3$selfreportRace=="EAS")
+uk_pcSAS <-which(datafile_imputed_3$PCRace=="SAS" & datafile_imputed_3$selfreportRace=="Unknown")
+datafile_imputed_3$imputeRace[c(EAS_pcSAS,uk_pcSAS)] <- "SAS"
+
+uk_pcAFR <-which(datafile_imputed_3$PCRace=="AFR" & datafile_imputed_3$selfreportRace=="Unknown")
+uk_pcEAS <-which(datafile_imputed_3$PCRace=="EAS" & datafile_imputed_3$selfreportRace=="Unknown")
+uk_pcEUR <-which(datafile_imputed_3$PCRace=="EUR" & datafile_imputed_3$selfreportRace=="Unknown")
+uk_pcLAT <-which(datafile_imputed_3$PCRace=="AMR" & datafile_imputed_3$selfreportRace=="Unknown")
+datafile_imputed_3$imputeRace[uk_pcAFR] <- "AFR"
+datafile_imputed_3$imputeRace[uk_pcEAS] <- "EAS"
+datafile_imputed_3$imputeRace[uk_pcEUR] <- "EUR"
+datafile_imputed_3$imputeRace[uk_pcLAT] <- "LAT"
+
+datafile_imputed_3$GWASRace[uk_pcAFR] <- "AFR"
+datafile_imputed_3$GWASRace[uk_pcEAS] <- "EAS"
+datafile_imputed_3$GWASRace[uk_pcEUR] <- "EUR"
+datafile_imputed_3$GWASRace[uk_pcLAT] <- "LAT"
+datafile_imputed_3$GWASRace[uk_pcSAS] <- NA
+
+write.table(datafile_imputed_3, "datafile_imputed_all.txt", row.names = FALSE, quote=FALSE)
+#datafile_imputed_3 <- fread("datafile_imputed_all.txt")
+
+setwd('/ccls/home/sli/GWAS/libby/v2') 
+args="ccls.v2"
+## Prepare ID files for imputation
+datafile_imputed_eur <- datafile_imputed_3 %>%
+  dplyr::filter(imputeRace=="EUR")%>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+write.table(datafile_imputed_eur, paste0(args,"_EUR_ids.txt"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+datafile_imputed_lat <- datafile_imputed_3 %>%
+  dplyr::filter(imputeRace=="LAT")%>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+write.table(datafile_imputed_lat, paste0(args,"_LAT_ids.txt"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+datafile_imputed_afr <- datafile_imputed_3 %>%
+  dplyr::filter(imputeRace=="AFR")%>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+write.table(datafile_imputed_afr, paste0(args,"_AFR_ids.txt"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+datafile_imputed_eas <- datafile_imputed_3 %>%
+  dplyr::filter(imputeRace=="EAS")%>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+write.table(datafile_imputed_eas, paste0(args,"_EAS_ids.txt"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+datafile_imputed_sas <- datafile_imputed_3 %>%
+  dplyr::filter(imputeRace=="SAS")%>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID))
+write.table(datafile_imputed_sas, paste0(args,"_SAS_ids.txt"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+## Prepare fam files for GWAs in concordance with imputed results
+setwd('/ccls/home/sli/GWAS/libby/v2') 
+fam_file <- read.table("racefile.fam")
+colnames(fam_file) <- c("FID","IID","IID_fa","IID_mo","sex","phenotype")
+raw <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  select(FID,IID,type) %>%
+  mutate(caco = ifelse(type=="CCLS_control",1,2))
+raw_1 <- raw %>%
+  dplyr::select(FID,IID,caco) %>%
+    mutate(FID = as.character(FID),
+         IID = as.character(IID))
+
+#prep european fam file 
+fam <- read.table("plink/EUR.asiptd.fam")
+colnames(fam) <- c("FID","IID","IID_fa","IID_mo","sex","phenotype")
+fam_file_1 <- fam %>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) %>%
+  left_join(fam_file,by=c("FID","IID")) %>%
+  dplyr::select(-phenotype) %>%
+  left_join(raw_1, by=c("FID","IID"))
+write.table(fam_file_1, "asiptd.EUR.gwas.fam", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+#prep lat fam file 
+fam <- read.table("plink/LAT.asiptd.fam")
+colnames(fam) <- c("FID","IID","IID_fa","IID_mo","sex","phenotype")
+fam_file_1 <- fam %>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) %>%
+  left_join(fam_file,by=c("FID","IID")) %>%
+  dplyr::select(-phenotype) %>%
+  left_join(raw_1, by=c("FID","IID"))
+write.table(fam_file_1, "asiptd.LAT.gwas.fam", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+#prep european fam file 
+fam <- read.table("plink/AFR.asiptd.fam")
+colnames(fam) <- c("FID","IID","IID_fa","IID_mo","sex","phenotype")
+fam_file_1 <- fam %>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) %>%
+  left_join(fam_file,by=c("FID","IID")) %>%
+  dplyr::select(-phenotype) %>%
+  left_join(raw_1, by=c("FID","IID"))
+write.table(fam_file_1, "asiptd.AFR.gwas.fam", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+#prep european fam file 
+fam <- read.table("plink/EAS.asiptd.fam")
+colnames(fam) <- c("FID","IID","IID_fa","IID_mo","sex","phenotype")
+fam_file_1 <- fam %>%
+  dplyr::select(FID, IID) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) %>%
+  left_join(fam_file,by=c("FID","IID")) %>%
+  dplyr::select(-phenotype) %>%
+  left_join(raw_1, by=c("FID","IID"))
+write.table(fam_file_1, "asiptd.EAS.gwas.fam", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+```
+
+```{r 2012/10/13}
+
+# subject Ids for CLIC
+setwd('/ccls/home/sli/GWAS/libby/v2') 
+library(tidyverse)
+
+datafile_imputed_3 <- fread("datafile_imputed_all.txt") %>%
+  as.data.frame() %>%
+  dplyr::select(FID,IID,selfreportRace,imputeRace)
+
+all_samples_variables <- fread("../clinical/sebastian_ccls_yrace.csv") %>%
+  select(FID, IID, subjectid,type,subtype) %>%
+  inner_join(datafile_imputed_3,by=c("FID","IID"))%>%
+  filter(type!="CCLS_control")
+
+write.table(all_samples_variables,"ccls.gwas.subjectIDs.txt",
+            row.names = FALSE,
+            quote=FALSE,
+            sep='\t')
+```
+
+```{bash imputation and data processing}
+# Get ready for imputation
+cd /ccls/home/sli/GWAS/libby/v2
+
+# Impute by ancestry
+for RACE in "EUR" "LAT" "AFR" "EAS" "SAS"; do
+  plink --bfile ccls.gwas \
+    --keep ccls.v2_"${RACE}"_ids.txt \
+    --allow-no-sex \
+    --recode vcf \
+    --keep-allele-order \
+    --out topmed_imputation/ccls.$RACE.preimp
+  #sort and tabix 
+  bcftools sort topmed_imputation/ccls.$RACE.preimp.vcf -Oz -o topmed_imputation/ccls.$RACE.preimp.sorted.vcf.gz 
+  tabix topmed_imputation/ccls.$RACE.preimp.sorted.vcf.gz
+  #split by chromomse
+  for chr in {1..22}; do
+    bcftools view --regions "${chr}" topmed_imputation/ccls.$RACE.preimp.sorted.vcf.gz -o topmed_imputation/ccls.$RACE.preimp.chr"${chr}".vcf.gz -Oz &
+  done
+done
+
+# Unzip impputed data
+# GWAS is done in different race assumption as imputation, so you need to combine every chromosome first and select subjects according to GWAS IDs
+
+
+# Choose two sets of files 0.6 and 0.9
+cd /ccls/home/sli/GWAS/libby/v2
+for RACE in "EUR" "LAT" "AFR" "EAS" "SAS"; do
+  for chr in {1..22};do
+    awk '($7 >0.6) {print $1}' <(zcat /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/chr"${chr}".info.gz) | sed '1d' > \
+        /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.06.chr"${chr}".txt;
+    awk '($7 >0.9) {print $1}' <(zcat /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/chr"${chr}".info.gz) | sed '1d' > \
+        /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.09.chr"${chr}".txt;
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS" "SAS"; do
+  cat /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.06.chr*.txt > /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.06.txt
+  cat /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.09.chr*.txt > /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/include.09.txt
+done
+
+# Convert imputed data to plink files
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS" "SAS"; do
+  for chr in {1..22};do
+    plink2 --vcf topmed_imputed/$RACE/chr"${chr}".dose.vcf.gz \
+      dosage=HDS \
+      --snps-only 'just-acgt' \
+      --max-alleles 2 \
+      --min-alleles 2 \
+      --extract topmed_imputed/$RACE/include.06.chr"${chr}".txt\
+      --maf 0.01 \
+      --make-pgen \
+      --out plink/$RACE.chr"${chr}".cvtd \
+      --threads 200
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS" "SAS"; do
+  for chr in {1..22};do
+    plink2 --pfile plink/$RACE.chr"${chr}".cvtd \
+    --make-bed \
+    --out plink/$RACE.chr"${chr}".cvtd
+  done
+done
+
+
+# Combine each chromosome into one PLINK file
+for chr in {1..22}; do
+  find ./plink -name "???.chr"${chr}".cvtd.bim" > plink/merge.chr$chr.cvtd.list
+  sed -i 's/.bim//g' plink/merge.chr$chr.cvtd.list
+  plink --merge-list plink/merge.chr$chr.cvtd.list \
+    --make-bed \
+    --out plink/chr$chr.com
+done
+
+# Change FID and IID to make it fit pre-imputation format
+cp plink/chr1.com.fam plink/chr1.com.fam.backup
+
+```
+
+```{r V2 change fam ID to make it correct}
+
+library(tidyverse)
+library(data.table)
+setwd('/ccls/home/sli/GWAS/libby/v2')  
+
+
+filelist <- c("plink/chr1.com.fam")
+a <- fread(filelist) %>%
+  as.data.frame() %>%
+  mutate(V1 = sub( "_[^_]+$","",V2),
+         V2 = gsub("^.*_","",V2)) 
+write.table(a, "plink/chrADJ.com.fam", col.names = FALSE, row.names = FALSE, quote=FALSE)
+```
+
+```{bash preparing plink file and conduct GWAS}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22}; do
+    cp plink/$RACE.chrADJ.cvtd.fam plink/$RACE.chr$chr.cvtd.fam
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  find ./plink -name "$RACE.chr*.cvtd.bim" > ./plink/merge.$RACE.asiptd.list 
+  sed -i 's/.bim//g' ./plink/merge.$RACE.asiptd.list
+  plink --merge-list plink/merge.$RACE.asiptd.list \
+    --make-bed \
+    --out plink/$RACE.asiptd
+  cp plink/$RACE.asiptd.fam plink/$RACE.asiptd.fam.backup  
+done
+
+cd /ccls/home/sli/GWAS/libby/v2
+for RACE in "EUR" "LAT" "AFR" "EAS"
+do
+  # HWE among controls using keep if
+  plink2 --bfile plink/$RACE.asiptd \
+    --hwe midp 1e-4 \
+    --fam asiptd.$RACE.gwas.fam \
+    --keep-if PHENO1 == control \
+    --make-pgen \
+    --out plink/ccls."${RACE}".1.asiptd \
+    --threads 200
+
+  # Make pgen again using remaining variants from pvar file 
+  plink2 --bfile plink/$RACE.asiptd \
+    --fam asiptd.$RACE.gwas.fam \
+    --make-pgen \
+    --extract plink/ccls."${RACE}".1.asiptd.pvar \
+    --out plink/ccls."${RACE}".2.asiptd \
+    --threads 200
+
+  # Make bed
+  plink2 --pfile plink/ccls."${RACE}".2.asiptd \
+    --make-bed \
+    --out plink/ccls."${RACE}".asiptd
+
+  #make bed for PCA analysis
+  # Create pruned SNPs for later use as controlling variables in regression
+  plink2 --bfile plink/ccls."${RACE}".asiptd \
+    --make-bed \
+    --out plink/ccls."${RACE}".asiptd.pca
+  
+  plink2 --bfile plink/ccls."${RACE}".asiptd.pca \
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out plink/ccls."${RACE}".asiptd.pruned
+  
+  plink2 --bfile plink/ccls."${RACE}".asiptd \
+    --extract plink/ccls."${RACE}".asiptd.pruned.prune.in\
+    --pca 10 \
+    --out plink/ccls."${RACE}".asiptd.pruned.pca\
+    --threads 200
+  
+  # Regression
+  plink2 --bfile plink/ccls."${RACE}".asiptd \
+    --fam asiptd.$RACE.gwas.fam \
+    --covar plink/ccls."${RACE}".asiptd.pruned.pca.eigenvec \
+    --threads 200 \
+    --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p \
+    --out ccls."${RACE}".asiptd
+done
+```
+
+```{bash meta-analysis}
+
+cd /ccls/home/sli/GWAS/libby/v2
+metal
+MARKER ID
+EFFECT BETA
+ALLELELABELS REF ALT1
+PVALUE P
+WEIGHTLABEL OBS_CT
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS ccls.EUR.asiptd.PHENO1.glm.logistic
+PROCESS ccls.LAT.asiptd.PHENO1.glm.logistic
+PROCESS ccls.AFR.asiptd.PHENO1.glm.logistic
+PROCESS ccls.EAS.asiptd.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL ccls.asiptd.meta.glm.logistic
+mv METAANALYSIS1.TBL.info ccls.asiptd.meta.glm.logistic.info
+
+```
+
+### ARMC5 extraction
+
+```{bash extracting ARMC5}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS";do
+  awk 'NR==1 || ($1==16 && $2>=31461775 && $2 <=31480318) {print $0}' ccls.$RACE.asiptd.PHENO1.glm.logistic > $RACE.ARMC5.glm.logistic
+done
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+ALLELELABELS REF ALT1
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS EUR.ARMC5.glm.logistic
+PROCESS LAT.ARMC5.glm.logistic
+PROCESS AFR.ARMC5.glm.logistic
+PROCESS EAS.ARMC5.glm.logistic
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.ARMC5.glm.TBL
+
+
+```
+
+```{r liftover bed prerparation}
+setwd("/ccls/home/sli/GWAS/libby/v2")
+library(tidyverse)
+library(data.table)
+
+a = fread("meta.ARMC5.glm.TBL") %>%
+  mutate(id17=MarkerName) %>%
+  separate(MarkerName,c("chr","pos","alt","ref"),sep=":") %>%
+  mutate(chr = paste0("chr",chr),
+         end = as.numeric(pos)+1)%>%
+  dplyr::select(chr,pos,end,id17)
+write.table(a,"before.lo.ARMC5.bed",
+            row.names = FALSE,
+            col.names = FALSE,
+            sep="\t",
+            quote=FALSE)
+
+
+```
+
+```{bash}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+liftOver before.lo.ARMC5.bed\
+  /ccls/home/sli/dependencies/liftOver/hg19ToHg38.over.chain\
+   before.lo.ARMC5.hg38.bed\
+   before.lo.ARMC5.unlifted
+
+```
+
+```{r}
+
+setwd("/ccls/home/sli/GWAS/libby/v2")
+library(tidyverse)
+library(data.table)
+
+coor =  fread("before.lo.ARMC5.hg38.bed") 
+a = fread("meta.ARMC5.glm.TBL") %>%
+  inner_join(coor,by=c("MarkerName"="V4")) %>%
+  mutate(MarkerName=paste0(V1,":",V2,":",toupper(Allele2),":",toupper(Allele1))) %>%
+  dplyr::select(-V1,-V2,-V3)
+
+write.table(a,"ccls.armc5.meta.txt",
+            row.names = FALSE,
+            sep="\t",
+            quote=FALSE)
+```
+
+
+### visualization
+
+```{r visualization}
+
+setwd("/ccls/home/sli/GWAS/libby/v2")
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("ccls.EUR.asiptd.PHENO1.glm.logistic",
+         "ccls.LAT.asiptd.PHENO1.glm.logistic",
+         "ccls.AFR.asiptd.PHENO1.glm.logistic",
+         "ccls.EAS.asiptd.PHENO1.glm.logistic",
+         "ccls.asiptd.meta.glm.logistic")
+
+for(i in files){
+
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) %>% na.omit()
+
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(gsub("chr","",as.character(CHROM))),POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.numeric(as.character(`#CHROM`)), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]
+
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID")
+  dev.off()
+
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P)
+  dev.off()
+
+}
+
+```
+
+# ALL GWAS with SNPTEST
+
+```{bash GWAS using SNPTEST}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22}; do
+    awk '($7 < 0.3) {print $1}' <(zcat /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/chr"${chr}".info.gz) |\
+    sed '1d' > \
+    /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/exclude.03.chr"${chr}".txt;
+  done
+done
+
+#MAF 0.05
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22};do
+    vcftools --gzvcf topmed_imputed/$RACE/chr"${chr}".dose.vcf.gz \
+      --maf 0.05 \
+      --exclude /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/exclude.03.chr"${chr}".txt \
+      --recode --stdout \
+      | gzip -c \
+      > snptest/$RACE.chr"${chr}".snptest.vcf.gz
+  done
+done
+
+#MAF 0.01
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22};do
+    vcftools --gzvcf topmed_imputed/$RACE/chr"${chr}".dose.vcf.gz \
+      --maf 0.01 \
+      --exclude /ccls/home/sli/GWAS/libby/v2/topmed_imputed/$RACE/exclude.03.chr"${chr}".txt \
+      --recode --stdout \
+      | gzip -c \
+      > snptest/$RACE.chr"${chr}".snptest.001.vcf.gz
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22};do
+  
+    plink --vcf snptest/$RACE.chr"${chr}".snptest.vcf.gz \
+    --double-id \
+    --make-bed \
+    --out snptest/plinkPCA/$RACE.chr"${chr}"
+  
+    plink --vcf snptest/$RACE.chr"${chr}".snptest.001.vcf.gz \
+    --double-id \
+    --make-bed \
+    --out snptest/plinkPCA/$RACE.chr"${chr}".001
+
+  done
+  
+  bcftools query -l snptest/$RACE.chr22.snptest.vcf.gz > snptest/$RACE.samples.list.ids
+
+done
+
+```
+
+MAF 0.05 results
+
+```{bash MAF=0.05}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+
+  find ./snptest/plinkPCA -name "$RACE.chr*.bim" > ./snptest/plinkPCA/merge.$RACE.snptest.list 
+  sed -i 's/.bim//g' snptest/plinkPCA/merge.$RACE.snptest.list
+  plink --merge-list snptest/plinkPCA/merge.$RACE.snptest.list \
+    --make-bed \
+    --out snptest/plinkPCA/$RACE.snptest.pca
+  
+  plink2 --bfile snptest/plinkPCA/$RACE.snptest.pca \
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out snptest/plinkPCA/$RACE.snptest
+  
+  plink2 --bfile snptest/plinkPCA/$RACE.snptest.pca \
+    --extract snptest/plinkPCA/$RACE.snptest.prune.in\
+    --pca 10 \
+    --out snptest/$RACE.snptest \
+    --threads 200
+    
+done
+
+```
+
+```{r SNPTEST MAF=0.05 phenotype file}
+
+setwd("~/GWAS/libby/v2/snptest")
+library(tidyverse)
+library(data.table)
+
+pheno <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  mutate(subjectID=paste0(FID,"_",IID),
+         caco=ifelse(type=="CCLS_control",1,2)) %>%
+  select(subjectID, caco)
+
+for(race in c("EUR","LAT","AFR","EAS")){
+
+  PCs <- fread(paste0(race,".snptest.eigenvec")) %>%
+    select(-1) %>%
+    rename( subjectID = IID )
+  
+  samples <- read.table(paste0(race,".samples.list.ids"))
+  colnames(samples) <- "subjectID"
+  
+  samples_cov <- samples %>%
+    left_join(pheno,by="subjectID") %>%
+    left_join(PCs,by="subjectID") %>%
+    rename(ID = subjectID) %>%
+    mutate(caco = ifelse(caco==1,0,1))
+  line2 <- c(0,"B",rep("C",10))
+  samples_cov_1 <- rbind(line2, samples_cov) %>% as.data.frame()
+  
+  write.table(samples_cov_1, paste0(race,".snptest.vars.txt"), 
+              row.names = FALSE, quote=FALSE)
+
+}
+
+```
+
+```{bash SNPTEST MAF=0.05 run}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22};do
+    snptest -data snptest/$RACE.chr"${chr}".snptest.vcf.gz\
+      snptest/$RACE.snptest.vars.txt\
+      -genotype_field GP \
+      -method expected \
+      -frequentist 1 \
+      -pheno caco \
+      -cov_names PC1 PC2 PC3 PC4 PC5 PC6 PC7 PC8 PC9 PC10 \
+      -hwe \
+      -o snptest/$RACE.chr"${chr}".out
+    done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  head -1 snptest/$RACE.chr1.out > snptest/overall.$RACE.snptest
+  tail -n +2 -q snptest/$RACE.chr*.out >> snptest/overall.$RACE.snptest
+done  
+```
+
+```{r visualization}
+
+setwd("/ccls/home/sli/GWAS/libby/v2")
+
+files =c("snptest/overall.EUR.snptest",
+         "snptest/overall.LAT.snptest",
+         "snptest/overall.AFR.snptest",
+         "snptest/overall.EAS.snptest")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  
+  gwas <- fread(i, skip=13,fill=TRUE)
+  gwas_1 <- gwas %>%
+    select(rsid, chromosome, position, frequentist_add_pvalue) %>%
+    mutate(chromosome = as.numeric(chromosome), position = as.numeric(position), frequentist_add_pvalue = as.numeric(frequentist_add_pvalue)) %>%
+    na.omit()
+  
+  gwas_data_1 <- gwas_1[is.finite(gwas_1$frequentist_add_pvalue),  ]
+  
+  lambda <- P_lambda(gwas_data_1$frequentist_add_pvalue)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "chromosome", bp = "position", p = "frequentist_add_pvalue", snp = "rsid")
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$frequentist_add_pvalue)
+  dev.off()
+
+}
+
+```
+
+MAF 0.01 results
+
+```{bash MAF=0.01}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+
+  find ./snptest/plinkPCA -name "$RACE.chr*.001.bim" > ./snptest/plinkPCA/merge.$RACE.snptest.001.list 
+  sed -i 's/.bim//g' snptest/plinkPCA/merge.$RACE.snptest.001.list
+  plink --merge-list snptest/plinkPCA/merge.$RACE.snptest.001.list \
+    --make-bed \
+    --out snptest/plinkPCA/$RACE.snptest.001.pca
+  
+  plink2 --bfile snptest/plinkPCA/$RACE.snptest.001.pca \
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out snptest/plinkPCA/$RACE.snptest.001
+  
+  plink2 --bfile snptest/plinkPCA/$RACE.snptest.001.pca \
+    --extract snptest/plinkPCA/$RACE.snptest.001.prune.in\
+    --pca 10 \
+    --out snptest/$RACE.snptest.001 \
+    --threads 200
+    
+done
+
+```
+
+```{r SNPTEST MAF=0.01 phenotype file}
+
+setwd("~/GWAS/libby/v2/snptest")
+library(tidyverse)
+library(data.table)
+
+pheno <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  mutate(subjectID=paste0(FID,"_",IID),
+         caco=ifelse(type=="CCLS_control",1,2)) %>%
+  select(subjectID, caco)
+
+for(race in c("EUR","LAT","AFR","EAS")){
+
+  PCs001 <- fread(paste0(race,".snptest.001.eigenvec")) %>%
+    select(-1) %>%
+    rename( subjectID = IID )
+  
+  samples <- read.table(paste0(race,".samples.list.ids"))
+  colnames(samples) <- "subjectID"
+  
+  samples_cov_2 <- samples %>%
+    left_join(pheno,by="subjectID") %>%
+    left_join(PCs001,by="subjectID") %>%
+    rename(ID = subjectID) %>%
+    mutate(caco = ifelse(caco==1,0,1))
+  line2_2 <- c(0,"B",rep("C",10))
+  samples_cov_2_1 <- rbind(line2_2, samples_cov_2) %>% as.data.frame()
+  
+  write.table(samples_cov_2_1, paste0(race,".snptest.001.vars.txt") , row.names = FALSE, quote=FALSE)
+
+}
+
+
+```
+
+```{bash SNPTEST MAF=0.01 run}
+
+cd /ccls/home/sli/GWAS/libby/v2
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for chr in {1..22};do
+    snptest -data snptest/$RACE.chr"${chr}".snptest.001.vcf.gz \
+      snptest/$RACE.snptest.001.vars.txt \
+      -genotype_field GP \
+      -method expected \
+      -frequentist 1 \
+      -pheno caco \
+      -cov_names PC1 PC2 PC3 PC4 PC5 PC6 PC7 PC8 PC9 PC10 \
+      -hwe \
+      -o snptest/001/$RACE.chr"${chr}".001.out
+    done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  head -1 snptest/001/$RACE.chr1.001.out > snptest/001/overall.$RACE.001.snptest
+  tail -n +2 -q snptest/001/$RACE.chr*.001.out >> snptest/001/overall.$RACE.001.snptest
+done
+```
+
+```{r visualization}
+
+setwd("/ccls/home/sli/GWAS/libby/v2")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+
+files =c("snptest/001/overall.EUR.001.snptest",
+         "snptest/001/overall.LAT.001.snptest",
+         "snptest/001/overall.AFR.001.snptest",
+         "snptest/001/overall.EAS.001.snptest")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  
+  gwas <- fread(i, skip=13,fill=TRUE)
+  gwas_1 <- gwas %>%
+    select(rsid, chromosome, position, frequentist_add_pvalue) %>%
+    mutate(chromosome = as.numeric(chromosome), position = as.numeric(position), frequentist_add_pvalue = as.numeric(frequentist_add_pvalue)) %>%
+    na.omit()
+  
+  gwas_data_1 <- gwas_1[is.finite(gwas_1$frequentist_add_pvalue),  ]
+  
+  lambda <- P_lambda(gwas_data_1$frequentist_add_pvalue)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "chromosome", bp = "position", p = "frequentist_add_pvalue", snp = "rsid")
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$frequentist_add_pvalue)
+  dev.off()
+
+}
+
+```
+
+# Subtype analysis with Plink
+
+```{bash subtype file preparation}
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+
+cp /ccls/home/sli/GWAS/libby/v2/asiptd.*.gwas.fam .
+cp /ccls/home/sli/GWAS/libby/v2/plink/???.asiptd.??? .
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  cp $RACE.asiptd.fam $RACE.asiptd.fam.backup
+  mv asiptd.$RACE.gwas.fam $RACE.asiptd.fam
+done
+```
+
+```{r Pick subtype subjects}
+
+library(tidyverse)
+library(data.table)
+
+setwd("~/GWAS/libby/v2_subtype")
+subtypes <- fread("../clinical/sebastian_ccls_pheno.csv") %>%
+  filter(leuk_dx %in% c("ALL","Control"))%>%
+  filter( (hyperdiploid_51to67_final %in% c(0,1)) & (t1221_final %in% c(0,1)) | leuk_dx=="Control") %>%
+  mutate(subtype=ifelse(hyperdiploid_51to67_final==0 & t1221_final==0, "doubleNegative",subtype),
+         subtype=ifelse(leuk_dx=="Control","control",subtype),
+         subtype=ifelse(hyperdiploid_51to67_final==1,"hyperdiploid",subtype),
+         subtype=ifelse(t1221_final==1,"telaml",subtype)) %>%
+  select(FID, IID,subtype) %>%
+  mutate(FID = as.character(FID),
+         IID = as.character(IID)) 
+
+table(subtypes$subtype)
+# control doubleNegative   hyperdiploid         telaml 
+#    919            450            280            156 
+
+for(i in c("doubleNegative","hyperdiploid","telaml")){
+Dn <- subtypes %>%
+  filter(subtype %in% c(i,"control")) %>%
+  select(FID, IID)
+write.table(Dn, paste0(i,".ids"), col.names = FALSE, row.names = FALSE, quote=FALSE)
+}
+
+```
+
+control doubleNegative   hyperdiploid         telaml 
+   919            450            280            156 
+
+```{bash make plink files for each subtype and execute GWAS with Plink}
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for subtype in "doubleNegative" "hyperdiploid" "telaml"; do
+    plink --bfile $RACE.asiptd \
+      --keep $subtype.ids \
+      --make-bed \
+      --out $RACE.$subtype
+  done
+done
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for subtype in "doubleNegative" "hyperdiploid" "telaml"; do
+    # HWE among controls using keep if
+    plink2 --bfile $RACE.$subtype \
+      --hwe midp 1e-4 \
+      --keep-if PHENO1 == control \
+      --make-pgen \
+      --out plink_sub/$RACE.$subtype.1.asiptd \
+      --threads 200
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for subtype in "doubleNegative" "hyperdiploid" "telaml"; do
+    # Make pgen again using remaining variants from pvar file 
+    plink2 --bfile $RACE.$subtype \
+      --make-pgen \
+      --extract plink_sub/$RACE.$subtype.1.asiptd.pvar \
+      --out plink_sub/$RACE.$subtype.2.asiptd \
+      --threads 200
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for subtype in "doubleNegative" "hyperdiploid" "telaml"; do
+      # Make bed
+      plink2 --pfile plink_sub/$RACE.$subtype.2.asiptd \
+        --make-bed \
+        --out plink_sub/$RACE.$subtype.asiptd
+  done
+done
+
+for RACE in "EUR" "LAT" "AFR" "EAS"; do
+  for subtype in "doubleNegative" "hyperdiploid" "telaml"; do
+
+  plink2 --bfile plink_sub/$RACE.$subtype.asiptd \
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out plink_sub/$RACE.$subtype.asiptd.pruned
+  
+  plink2 --bfile plink_sub/$RACE.$subtype.asiptd \
+    --extract plink_sub/$RACE.$subtype.asiptd.pruned.prune.in\
+    --pca 10 \
+    --out plink_sub/$RACE.$subtype.asiptd.pruned.pca\
+    --threads 200
+  
+  # Regression
+  plink2 --bfile plink_sub/$RACE.$subtype.asiptd \
+    --covar plink_sub/$RACE.$subtype.asiptd.pruned.pca.eigenvec \
+    --threads 200 \
+    --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p \
+    --out $RACE.$subtype
+    
+  done
+done
+```
+
+```{bash meta-analysis}
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+metal
+MARKER ID
+EFFECT BETA
+ALLELELABELS REF ALT1
+PVALUE P
+WEIGHTLABEL OBS_CT
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS EUR.doubleNegative.PHENO1.glm.logistic
+PROCESS LAT.doubleNegative.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL meta.doubleNegative.PHENO1.glm.logistic
+mv METAANALYSIS1.TBL.info meta.doubleNegative.PHENO1.glm.logistic.info
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+metal
+MARKER ID
+EFFECT BETA
+ALLELELABELS REF ALT1
+PVALUE P
+WEIGHTLABEL OBS_CT
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS EUR.hyperdiploid.PHENO1.glm.logistic
+PROCESS LAT.hyperdiploid.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL meta.hyperdiploid.PHENO1.glm.logistic
+mv METAANALYSIS1.TBL.info meta.hyperdiploid.PHENO1.glm.logistic.info
+
+cd /ccls/home/sli/GWAS/libby/v2_subtype
+metal
+MARKER ID
+EFFECT BETA
+ALLELELABELS REF ALT1
+PVALUE P
+WEIGHTLABEL OBS_CT
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS EUR.telaml.PHENO1.glm.logistic
+PROCESS LAT.telaml.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL meta.telaml.PHENO1.glm.logistic
+mv METAANALYSIS1.TBL.info meta.telaml.PHENO1.glm.logistic.info
+```
+
+```{r visualization}
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("EUR.doubleNegative.PHENO1.glm.logistic",
+         "LAT.doubleNegative.PHENO1.glm.logistic",
+         "EAS.doubleNegative.PHENO1.glm.logistic",
+         "EUR.hyperdiploid.PHENO1.glm.logistic",
+         "LAT.hyperdiploid.PHENO1.glm.logistic",
+         "EAS.hyperdiploid.PHENO1.glm.logistic",
+         "EUR.telaml.PHENO1.glm.logistic",
+         "LAT.telaml.PHENO1.glm.logistic",
+         "EAS.telaml.PHENO1.glm.logistic",
+         "meta.doubleNegative.PHENO1.glm.logistic",
+         "meta.hyperdiploid.PHENO1.glm.logistic",
+         "meta.telaml.PHENO1.glm.logistic")
+
+for(i in files){
+
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) %>% na.omit()
+
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(gsub("chr","",as.character(CHROM))),POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.numeric(as.character(`#CHROM`)), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]
+
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID")
+  dev.off()
+
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P)
+  dev.off()
+
+}
+
+
+```
+
+# redo CLIC for Soyoung (2021/03/25)
+
+```{r covariates useful for clic analysis}
+
+setwd('/ccls/home/sli/GWAS/libby/soyoung') 
+
+all_samples_variables <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  dplyr::select(-V1,-Obs) %>%
+  dplyr::filter(Y_race %in% c(1,3),
+                type %in% c("CCLS_ALL","CCLS_control")) %>%
+  mutate(caco=ifelse(type=="CCLS_control",1,2))
+  
+originalFam = fread("/ccls/home/sli/GWAS/libby/ccls/ccls.1.gwas.fam") %>%
+  inner_join(all_samples_variables,by=c("V1"="FID","V2"="IID")) %>%
+  dplyr::select(V1,V2,V3,V4,V5,caco)
+write.table(originalFam,"clic.neo.fam.txt",
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE,
+            sep='\t')
+
+```
+
+
+```{bash}
+
+#start from /ccls/home/sli/GWAS/libby/ccls/ccls.1.gwas bfiles
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+plink --bfile /ccls/home/sli/GWAS/libby/ccls/ccls.1.gwas\
+  --keep clic.neo.fam.txt\
+  --indiv-sort f clic.neo.fam.txt\
+  --make-bed\
+  --out clic.usc
+  
+cp clic.neo.fam.txt clic.neo.fam.txt.backup
+mv clic.neo.fam.txt.backup clic.usc.fam
+
+plink --bfile clic.usc --geno 0.2 --make-bed --out temp/clic.usc.1 
+plink --bfile temp/clic.usc.1 --mind 0.2 --make-bed --out temp/clic.usc.2
+plink --bfile temp/clic.usc.2 --geno 0.02 --make-bed --out temp/clic.usc.3
+plink --bfile temp/clic.usc.3 --mind 0.05 --make-bed --out temp/clic.usc.4
+plink --bfile temp/clic.usc.4 --hwe 1e-5 --make-bed --out temp/clic.usc.5
+plink --bfile temp/clic.usc.5 --maf 0.01 --make-bed --out temp/clic.usc.6
+
+plink --bfile temp/clic.usc.6\
+  --exclude /ccls/home/sli/GWAS/ref/codes/inversion_hg37.txt \
+  --indep-pairwise 50 5 0.2\
+  --out indepSNP
+
+plink --bfile temp/clic.usc.6 --extract indepSNP.prune.in --genome \
+  --min 0.2 --out pihat_min0.2
+
+awk '{print $1,$2}' pihat_min0.2.genome > relatedness.drop.list
+
+plink --bfile temp/clic.usc.6 --remove relatedness.drop.list --make-bed --out temp/clic.usc.6  
+
+plink --bfile temp/clic.usc.6 --extract indepSNP.prune.in --het --out R_check
+Rscript --no-save /ccls/home/sli/GWAS/ref/codes/heterozygosity_outliers_list.R
+
+plink --bfile temp/clic.usc.6 --remove fail-het-qc.txt --make-bed --out temp/clic.usc.7
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+plink --bfile temp/clic.usc.7\
+  --recode vcf\
+  --keep-allele-order\
+  --out pre_impute/pre_impute
+
+cd /ccls/home/sli/GWAS/libby/soyoung/pre_impute
+
+#sort and tabix 
+bcftools sort pre_impute.vcf -Oz -o pre_impute_sorted.vcf.gz
+tabix pre_impute_sorted.vcf.gz
+
+#split by chromomse
+for chr in {1..22}; do
+  bcftools view --regions "${chr}" pre_impute_sorted.vcf.gz -o pre_impute_chr"${chr}".vcf.gz -Oz &
+done
+
+# wait for imputation to finish
+cd /ccls/home/sli/GWAS/libby/soyoung/hrc
+# PASSWORD: MvRHd2jhmnXY7o
+
+for chr in {1..22}; do
+  unzip -P "MvRHd2jhmnXY7o" chr_"${chr}".zip
+  echo chr_"${chr}".zip unzip success
+done  
+
+for chr in {1..22}; do
+  awk '($7 < 0.5) {print $1}' <(zcat chr"${chr}".info.gz) | sed '1d' > exclude.05.chr"${chr}".txt;
+done
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+bcftools query -l hrc/chr22.dose.vcf.gz > snptest/samples.list.ids
+
+cd /ccls/home/sli/GWAS/libby/soyoung/topmed
+# PASSWORD: 
+
+```
+
+# ALL GWAS with SNPTEST
+
+```{bash GWAS using SNPTEST}
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+for chr in {1..22};do
+  plink --vcf hrc/chr"${chr}".dose.vcf.gz\
+  --double-id\
+  --make-bed\
+  --out snptest/plinkPCA/chr"${chr}".001
+done
+
+find ./snptest/plinkPCA -name "chr*.001.bim" > ./snptest/plinkPCA/merge.snptest.001.list 
+sed -i 's/.bim//g' snptest/plinkPCA/merge.snptest.001.list
+plink --merge-list snptest/plinkPCA/merge.snptest.001.list \
+  --make-bed \
+  --out snptest/plinkPCA/snptest.001.pca
+
+```
+
+```{r select individuals for each run}
+
+setwd("/ccls/home/sli/GWAS/libby/soyoung/snptest")
+library(tidyverse)
+library(data.table)
+
+subjects = fread("samples.list.ids",header=FALSE) %>%
+  as.data.frame() %>%
+  mutate(vcf_id=V1)%>%
+  mutate(V1= gsub("CCLS_|-1|-2","",V1)) %>%
+  separate(V1,c("FID","IID"))
+
+all_samples_variables <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(-V1,-Obs) %>%
+  dplyr::filter(Y_race %in% c(1,3),
+                type %in% c("CCLS_ALL","CCLS_control")) %>%
+  mutate(caco=ifelse(type=="CCLS_control",1,2))
+
+table(all_samples_variables$type)
+# CCLS_ALL CCLS_control 
+#       926          783 
+
+table(all_samples_variables$subtype)
+#                                Bcell CCLS_ALL_hyperdiploid 
+#            1133                   265                   171 
+# CCLS_ALL_telaml                 Tcell 
+#              81                    59 
+                   
+# all cases and controls
+allSubs = all_samples_variables %>%
+  inner_join(subjects,by="IID")
+
+# writing for Soyoung
+allSubsSY = allSubs %>%
+  dplyr::select(vcf_id,type,subtype,Y_race)
+write.table(allSubsSY,"/ccls/data_ccls_topmed/users/sli/covars/subtypeInfo.txt",
+            row.names = FALSE,
+            quote=FALSE,
+            sep='\t')
+
+allSubs.eur = allSubs %>% filter(Y_race==1)
+write.table(allSubs.eur['vcf_id'],"all.eur.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+allSubs.lat = allSubs %>% filter(Y_race==3)
+write.table(allSubs.lat['vcf_id'],"all.lat.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+# B cell ALL only vs. controls
+bcellSubs = all_samples_variables %>%
+  filter(subtype %in% c("Bcell","CCLS_ALL_hyperdiploid","CCLS_ALL_telaml")|type=="CCLS_control") %>%
+  inner_join(subjects,by="IID")
+
+bcellSubs.eur = bcellSubs %>% filter(Y_race==1)
+write.table(bcellSubs.eur['vcf_id'],"bcell.eur.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+bcellSubs.lat = bcellSubs %>% filter(Y_race==3)
+write.table(bcellSubs.lat['vcf_id'],"bcell.lat.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+# T cell ALL only vs. controls
+tcellSubs = all_samples_variables %>%
+  filter(subtype %in% c("Tcell")|type=="CCLS_control") %>%
+  inner_join(subjects,by="IID")
+
+tcelllSubs.eur = tcellSubs %>% filter(Y_race==1)
+write.table(tcelllSubs.eur['vcf_id'],"tcell.eur.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+tcelllSubs.lat = tcellSubs %>% filter(Y_race==3)
+write.table(tcelllSubs.lat['vcf_id'],"tcell.lat.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+# B cell ALL, high-hyperdiploid+ vs. controls
+hyperdiploid = all_samples_variables %>%
+  filter(subtype %in% c("CCLS_ALL_hyperdiploid")|type=="CCLS_control") %>%
+  inner_join(subjects,by="IID")
+
+hyperdiploidSubs.eur = hyperdiploid %>% filter(Y_race==1)
+write.table(tcelllSubs.eur['vcf_id'],"hyperdiploid.eur.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+hyperdiploidSubs.lat = hyperdiploid %>% filter(Y_race==3)
+write.table(tcelllSubs.lat['vcf_id'],"hyperdiploid.lat.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+# B cell ALL, ETV6/RUNX1+ vs. controls
+etvrunx6 = all_samples_variables %>%
+  filter(subtype %in% c("CCLS_ALL_telaml")|type=="CCLS_control") %>%
+  inner_join(subjects,by="IID")
+
+etvrunx6Subs.eur = etvrunx6 %>% filter(Y_race==1)
+write.table(etvrunx6Subs.eur['vcf_id'],"etvrunx6.eur.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+etvrunx6Subs.lat = etvrunx6 %>% filter(Y_race==3)
+write.table(etvrunx6Subs.lat['vcf_id'],"etvrunx6.lat.subs.txt",
+            row.names = FALSE, col.names = FALSE, quote=FALSE, sep='\t')  
+
+
+```
+
+```{bash}
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+#subtype='all'
+#race='eur'
+
+for race in "eur" "lat"; do
+  for subtype in "all" "bcell" "tcell" "hyperdiploid" "etvrunx6"; do
+
+    awk '{print $1,$1}' snptest/$subtype.$race.subs.txt > snptest/$subtype.$race.subs.plink.txt
+    
+    plink2 --bfile snptest/plinkPCA/snptest.001.pca\
+      --keep snptest/$subtype.$race.subs.plink.txt\
+      --make-bed\
+      --out snptest/plinkPCA/snptest.$subtype.$race.001.pca
+    
+    plink2 --bfile snptest/plinkPCA/snptest.$subtype.$race.001.pca\
+      --maf 0.1 \
+      --indep-pairwise 50 10 0.1 \
+      --out snptest/plinkPCA/snptest.$subtype.$race.001
+    plink2 --bfile snptest/plinkPCA/snptest.$subtype.$race.001.pca\
+      --extract snptest/plinkPCA/snptest.$subtype.$race.001.prune.in\
+      --pca 10 \
+      --out snptest/snptest.$subtype.$race.001 \
+      --threads 200
+      
+  done
+done
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+#subtype="hyperdiploid"
+#race='eur'
+for race in "eur" "lat"; do
+  for subtype in "all" "bcell" "tcell" "hyperdiploid" "etvrunx6"; do
+      for chr in {1..22};do
+        vcftools --gzvcf hrc/chr"${chr}".dose.vcf.gz\
+          --maf 0.01 \
+          --exclude hrc/exclude.05.chr"${chr}".txt\
+          --keep snptest/$subtype.$race.subs.txt\
+          --recode --stdout \
+          | gzip -c \
+          > snptest/chr"${chr}".$subtype.$race.snptest.001.vcf.gz
+     done
+     
+  # seems sample order have changed.. just to be sure
+ bcftools query -l snptest/chr22.$subtype.$race.snptest.001.vcf.gz >\
+  snptest/samples.snptest.$subtype.$race.ids
+
+ done 
+done
+
+
+```
+
+```{r genrate variable files for SNPTEST}
+
+setwd("/ccls/home/sli/GWAS/libby/soyoung/snptest")
+library(tidyverse)
+library(data.table)
+
+pheno <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_yrace.csv") %>%
+  as.data.frame() %>%
+  mutate(subjectID=paste0(FID,"_",IID),
+         caco=ifelse(type=="CCLS_control",1,2)) %>%
+  select(subjectID, caco)
+
+for(subtype in c("all","bcell","tcell","hyperdiploid","etvrunx6")){
+  for(race in c("eur","lat")){
+    
+    #subtype="hyperdiploid"
+    #race='eur'
+    samples <- read.table(paste0("samples.snptest.",subtype,".",race,".ids"))
+    colnames(samples) <- "subjectID"
+    
+    PCs001 <- fread(paste0("snptest.",subtype,".",race,".001.eigenvec")) %>%
+      select(-1) %>%
+      rename( subjectID = IID )
+    
+    samples_cov_2 <- samples %>%
+      left_join(pheno,by="subjectID") %>%
+      left_join(PCs001,by="subjectID") %>%
+      rename(ID = subjectID) %>%
+      mutate(caco = ifelse(caco==1,0,1))
+    line2_2 <- c(0,"B",rep("C",10))
+    samples_cov_2_1 <- rbind(line2_2, samples_cov_2) %>% as.data.frame()
+    
+    write.table(samples_cov_2_1, paste0(subtype,".",race,".snptest.001.vars.txt") , row.names = FALSE, quote=FALSE)
+    
+  }
+}
+
+```
+
+
+```{bash SNPTEST MAF=0.01 run}
+
+cd /ccls/home/sli/GWAS/libby/soyoung
+
+#subtype="hyperdiploid"
+#race='eur'
+
+for race in "eur" "lat"; do
+  for subtype in "all" "bcell" "tcell" "hyperdiploid" "etvrunx6"; do
+  cp /ccls/home/sli/GWAS/libby/soyoung/snptest/$subtype.$race.snptest.001.vars.txt .
+done
+done
+
+
+for race in "eur" "lat"; do
+  for subtype in "all" "bcell" "tcell" "hyperdiploid" "etvrunx6"; do
+  
+    for chr in {1..22};do
+      
+      snptest -data snptest/chr"${chr}".$subtype.$race.snptest.001.vcf.gz\
+              snptest/$subtype.$race.snptest.001.vars.txt\
+              -filetype vcf\
+              -genotype_field GP\
+              -method score\
+              -frequentist 1\
+              -pheno caco\
+              -cov_names PC1 PC2 PC3 PC4 PC5 PC6 PC7 PC8 PC9 PC10\
+              -o snptest/$subtype.$race.chr"${chr}".out
+              
+    done
+  
+    head -1 snptest/$subtype.$race.chr1.out > snptest/$subtype.$race.snptest.out
+    tail -n +2 -q snptest/$subtype.$race.chr*.out >> snptest/$subtype.$race.snptest.out
+
+  done
+done
+
+```
+
+
+# generating CCLS for Soyoung's replication on topmed
+
+/ccls/data_ccls_topmed
+
+# look up for libby rs77111113
+
+```{bash}
+
+cd ~/GWAS/libby/rs77111113
+
+# grep "chr5:368084:" /ccls/proj_circle2_p3/users/sebastian/temp/iptd/chr5.imputed.bim
+# chr5:368084:C:T
+
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/temp/iptd/chr5.imputed\
+  --snps 'chr5:368084:C:T'\
+  --make-bed\
+  --out rs77111113.ccls\
+  --threads 200
+
+```
+
+```{r}
+
+setwd("~/GWAS/libby/rs77111113")
+library(tidyverse)
+library(data.table)
+
+subs_missing = read.csv("ahrr_missing_subjectid.csv")
+
+subs_avail = fread("rs77111113.ccls.fam") %>%
+  mutate(subjectid = gsub("0_","",V2)) %>%
+  filter(subjectid %in% subs_missing$subjectid)
+
+write.table(subs_avail,"subs_avail.txt",
+            quote=FALSE,
+            sep='\t',
+            row.names = FALSE,
+            col.names = FALSE)
+
+```
+
+```{bash}
+
+cd ~/GWAS/libby/rs77111113
+
+plink --bfile rs77111113.ccls\
+  --keep subs_avail.txt\
+  --allow-no-sex\
+  --recode vcf bgz\
+  --out rs77111113.ccls.4sub\
+  --threads 200
+
+```
+

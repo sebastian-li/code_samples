@@ -1,0 +1,923 @@
+
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: Finding germline variants from childhood with rhabdomyosarcoma, and identifying ancestral origins of these variants
+
+```{bash GATK pipeline on exosome sequencing data}
+
+# raw files are saved at/project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832
+
+cd /project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832
+
+
+```
+
+```{bash install tools}
+
+############################
+
+# TrimGalore
+## low-quality base calls are trimmed off from the 3' end of the reads before adapter removal
+## Cutadapt finds and removes adapter sequences from the 3’ end of reads.
+## filter trimmed reads based on their sequence length (default: 20 bp) since quality and/or adapter trimming may result in very short sequences
+
+module load gcc/11.3.0 py-cutadapt fastqc/0.11.9
+
+cd /project/wiemels_260/sebastian/dependencies/trimGalore
+
+## Check that dependents are installed
+cutadapt --version
+fastqc -v
+
+## Install Trim Galore
+#curl -fsSL https://github.com/FelixKrueger/TrimGalore/archive/refs/tags/0.6.7.tar.gz -o trim_galore.tar.gz
+curl -fsSL https://github.com/FelixKrueger/TrimGalore/archive/refs/tags/0.6.6.tar.gz -o trim_galore.tar.gz
+
+tar xvzf trim_galore.tar.gz
+
+#export PATH="/project/wiemels_260/sebastian/dependencies/trimGalore/TrimGalore-0.6.6/:$PATH"
+
+## Run Trim Galore
+module load gcc/11.3.0 py-cutadapt fastqc/0.11.9
+trim_galore
+
+############################
+
+```
+
+> start from here if want to try trim_galore
+
+```{bash trim_galore.sh}
+
+#!/bin/bash
+#SBATCH --time=30:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/trimgalore_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/trimgalore_%A_%a.errcd
+#SBATCH --job-name=trimgalore
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=45G
+#SBATCH --partition=main
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp.sh
+module load gcc/11.3.0 py-cutadapt fastqc/0.11.9
+
+dir=(`ls -d /project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832/Sample* | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fas1=(`ls $dir | grep '_R1_'`)
+fas2=(`ls $dir | grep '_R2_'`)
+
+fastq1=(`echo ${dir}/${fas1}`)
+fastq2=(`echo ${dir}/${fas2}`)
+
+trim_galore --illumina --paired --fastqc -o trim_galore/ $fastq1 $fastq2 
+
+```
+
+> start from here if want to try fast qc only
+
+```{bash fastqc}
+
+#!/bin/bash
+#SBATCH --time=30:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/fastqc_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/fastqc_%A_%a.errcd
+#SBATCH --job-name=fastqc
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=45G
+#SBATCH --partition=main
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/fastqc
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp.sh
+module load gcc/11.3.0 fastqc/0.11.9
+
+dir=(`ls -d /project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832/Sample* | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fas1=(`ls $dir | grep '_R1_'`)
+fas2=(`ls $dir | grep '_R2_'`)
+
+fastq1=(`echo ${dir}/${fas1}`)
+fastq2=(`echo ${dir}/${fas2}`)
+
+fastqc --noextract $fastq1 $fastq2 \
+  --outdir /project/lishaobo_902/sebastian/rhabdo/snp_dis/fastqc\
+  -t 20
+
+```
+
+create unaligned bam
+
+```{bash fast2ubam.sh}
+
+#!/bin/bash
+#SBATCH --time=30:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/fast2ubam_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/fast2ubam_%A_%a.errcd
+#SBATCH --job-name=fast2ubam
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=45G
+#SBATCH --partition=main 
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/fast2ubam
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp2.sh
+
+dir=(`ls -d /project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832/Sample* | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fas1=(`ls $dir | grep '_R1_'`)
+fas2=(`ls $dir | grep '_R2_'`)
+
+fastq1=(`echo ${dir}/${fas1}`)
+fastq2=(`echo ${dir}/${fas2}`)
+base=$(basename ${fastq1} _R1_001.fastq.gz)
+
+OUTFILE=/project/lishaobo_902/sebastian/rhabdo/snp_dis/fast2ubam/${base}_unaligned_read_pairs.bam
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk FastqToSam \
+    --java-options "-Xmx38G"\
+    -F1 $fastq1 \
+    -F2 $fastq2 \
+    -O $OUTFILE \
+    -SM $base \
+    -RG "${base}_CBDAFANXX" \
+    -PG PGS-CORE_DNA_v1.4.2 \
+    -PU CBDAFANXX \
+    -PL ILLUMINA \
+    -LB $base 
+    
+#singularity run \
+#  --bind /project/lishaobo_902/sebastian/rhabdo/snp_dis:/snp_dis \
+#  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif
+  
+```
+
+create aligned bam
+
+```{bash bwa}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/bwa_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/bwa_%A_%a.errcd
+#SBATCH --job-name=bwa
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+module load gcc/11.3.0 bwa/0.7.17
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/bwa
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp1.sh
+
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+
+dir=(`ls -d /project/lishaobo_902/sebastian/rhabdo/sample_dir_000007832/Sample* | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fas1=(`ls $dir | grep '_R1_'`)
+fas2=(`ls $dir | grep '_R2_'`)
+fastq1=(`echo ${dir}/${fas1}`)
+fastq2=(`echo ${dir}/${fas2}`)
+
+base=$(basename ${fastq1} _R1_001.fastq.gz)
+
+outfile=/project/lishaobo_902/sebastian/rhabdo/snp_dis/bwa/${base}_aligned.bam
+
+bwa mem $ref \
+  -R "@RG\tID:${base}_CBDAFANXX\tPL:ILLUMINA:CBDAFANXX\tLB:${base}\tSM:${base}\tPG:PGS-CORE_DNA_v1.4.2" \
+  -t 20 $fastq1 $fastq2 |\
+  samtools view -S -b > $outfile
+
+
+```
+
+merge unaligned and aligned bam files
+
+```{bash}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/mergebam_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/mergebam_%A_%a.errcd
+#SBATCH --job-name=mergebam
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/mergebam
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+
+BAM=(`ls /project/lishaobo_902/sebastian/rhabdo/snp_dis/bwa/*aligned.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+base=$(basename ${BAM} _aligned.bam)
+
+UBAM=/project/lishaobo_902/sebastian/rhabdo/snp_dis/fast2ubam/${base}_unaligned_read_pairs.bam
+
+O=${base}_merged_alignments.bam
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk MergeBamAlignment \
+    --java-options "-Xmx38G"\
+    -ALIGNED $BAM\
+    -UNMAP_CONTAMINANT_READS true\
+    -CLIP_ADAPTERS false\
+    -MAX_RECORDS_IN_RAM 5000000\
+    -UNMAPPED $UBAM\
+    -O $O \
+    -R $ref \
+    -CREATE_INDEX true 
+
+```
+
+from mark duplicates to HaplotypeCaller
+keren's refs are saved at: /project/desmith_488/kerenxu/refs
+
+```{bash Caller}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/caller_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/caller_%A_%a.errcd
+#SBATCH --job-name=caller
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller
+
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+known_sites=/project/wiemels_260/sebastian/dependencies/gatk/refs/All_20180418-3.vcf.gz
+BED=/project/wiemels_260/sebastian/dependencies/gatk/refs/ace_liftover_r5.bed
+
+FILE=(`ls /project/lishaobo_902/sebastian/rhabdo/snp_dis/mergebam/*_merged_alignments.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+echo ${FILE}
+
+base=$(basename ${FILE} _merged_alignments.bam)
+
+OUTFILE=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}.marked_duplicates.bam
+MARKFILE=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}.marked_dup_metrics.txt
+OUTFILE2=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_sorted.bam
+OUTBQSRTABLE=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_post_bqsr2.table
+OUTFILE3=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_post_bqsr2.bam
+OUTFILE4=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}.g.vcf
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk MarkDuplicates \
+    --java-options "-Xmx64G"\
+    -I $FILE\
+    -O $OUTFILE\
+    -M $MARKFILE\
+    -CREATE_INDEX true
+    
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SortSam \
+    --java-options "-Xmx64G"\
+    -I $OUTFILE\
+    -O $OUTFILE2\
+    -CREATE_INDEX true\
+    -SO coordinate
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk BaseRecalibrator \
+    --java-options "-Xmx64G"\
+    -I $OUTFILE2\
+    -O $OUTBQSRTABLE\
+    -known-sites $known_sites\
+    -R $ref\
+    -L $BED
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk ApplyBQSR \
+    --java-options "-Xmx64G"\
+    -bqsr-recal-file $OUTBQSRTABLE\
+    -I $OUTFILE2 \
+    -O $OUTFILE3 \
+    -R $ref\
+    -L $BED
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk HaplotypeCaller \
+    --java-options "-Xmx64G"\
+    -I $OUTFILE3 \
+    -O $OUTFILE4 \
+    -R $ref\
+    -native-pair-hmm-threads 20\
+    -L $BED\
+    -ERC GVCF\
+    -G StandardAnnotation\
+    -G AS_StandardAnnotation
+
+```
+
+```{bash bqsrplot}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-47
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/bqsrplot_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/bqsrplot_%A_%a.errcd
+#SBATCH --job-name=caller
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp.sh
+
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+known_sites=/project/wiemels_260/sebastian/dependencies/gatk/refs/All_20180418-3.vcf.gz
+BED=/project/wiemels_260/sebastian/dependencies/gatk/refs/ace_liftover_r5.bed
+
+INPUTBAM=(`ls /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/*_post_bqsr2.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+echo ${INPUTBAM}
+
+base=$(basename ${INPUTBAM} _post_bqsr2.bam)
+
+OUTBQSRTABLE2=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_after_bqsr2.table
+OUTBQSRTABLE=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_post_bqsr2.table
+
+OUTCSV=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_AnalyzeCovariates.csv
+OUTPDF=/project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/${base}_AnalyzeCovariates.pdf
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk BaseRecalibrator \
+    --java-options "-Xmx64G"\
+    -I $INPUTBAM \
+    -O $OUTBQSRTABLE2 \
+    -known-sites $known_sites\
+    -R $ref\
+    -L $BED
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk AnalyzeCovariates \
+    --java-options "-Xmx64G"\
+    -before $OUTBQSRTABLE\
+    -after $OUTBQSRTABLE2\
+    -plots $OUTPDF\
+    -csv $OUTCSV
+
+```
+
+```{bash dbimport}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=END
+#SBATCH --array=1-25
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/dbimp_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/dbimp_%A_%a.errcd
+#SBATCH --job-name=dbimp
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller
+#sbatch /project/lishaobo_902/sebastian/rhabdo/codes/temp2.sh
+
+# create a sample map file, rhabdo.sample.map
+## to create a tab in terminal, do echo -e '[\t]'
+## tab-delimited text file with sample_name--tab--path_to_sample_vcf per line
+#sample1       sample1.vcf.gz
+
+
+POS=(`cat /project/wiemels_260/sebastian/dependencies/gatk/refs/chrom_num.text | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+
+mkdir -p /project/lishaobo_902/sebastian/rhabdo/snp_dis/dbimport/${POS}
+POS_dir=/project/lishaobo_902/sebastian/rhabdo/snp_dis/dbimport/${POS}
+
+OUTFILE=${POS_dir}/${POS}.vcf.gz
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk GenomicsDBImport\
+    --java-options "-Xmx64G"\
+    -genomicsdb-workspace-path $POS_dir\
+    -L $POS\
+    -sample-name-map rhabdo.sample.map\
+    -reader-threads 20\
+    -batch-size 1
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk GenotypeGVCFs\
+    --java-options "-Xmx64G"\
+    -R $ref \
+    -V gendb://$POS_dir\
+    -G StandardAnnotation \
+    -new-qual true \
+    -O $OUTFILE
+
+
+```
+
+```{bash merge vcfs}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/mergevcfs_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/mergevcfs_%A_%a.errcd
+#SBATCH --job-name=mergevcfs
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller
+
+# create a file of MergeVcfs.list containing all paths of vcf.gz files
+##/project/lishaobo_902/sebastian/rhabdo/snp_dis/dbimport/chr1/chr1.vcf.gz
+##/project/lishaobo_902/sebastian/rhabdo/snp_dis/dbimport/chr2/chr2.vcf.gz
+##...
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk MergeVcfs\
+    --java-options "-Xmx64G"\
+    -I /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/MergeVcfs.list\
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/chr.all.vcf.gz
+
+
+```
+
+filtering SNP calling
+
+```{bash hard filtering}
+
+#!/bin/bash
+#SBATCH --time=15:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/vqsr_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/vqsr_%A_%a.errcd
+#SBATCH --job-name=vqsr
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller
+ref=/project/wiemels_260/sebastian/dependencies/gatk/refs/GRCh38_full_analysis_set_plus_decoy_hla.fa
+
+bcftools view chr.all.vcf.gz  -i  "FMT/DP>8 & FMT/GQ>20" \
+  -o chr.all.dg.vcf.gz \
+  -O z --threads 20
+  
+bcftools view chr.all.dg.vcf.gz -i "AVG(FORMAT/GQ)>35 & F_MISSING < 0.1" \
+  -o chr.all.avg.gq.vcf.gz \
+  -O z --threads 20
+
+tabix chr.all.avg.gq.vcf.gz
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk VariantRecalibrator\
+    --java-options "-Xmx50G"\
+    -R $ref \
+    -V /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/chr.all.avg.gq.vcf.gz \
+    --resource:hapmap,known=false,training=true,truth=true,prior=15.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/hapmap_3.3.hg38.vcf.gz \
+    --resource:omni,known=false,training=true,truth=false,prior=12.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/1000G_omni2.5.hg38.vcf.gz \
+    --resource:1000G,known=false,training=true,truth=false,prior=10.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/1000G_phase1.snps.high_confidence.hg38.vcf.gz \
+    --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf \
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
+    -mode SNP \
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_SNP.recal\
+    --tranches-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_SNP.tranches \
+    --rscript-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_SNP.plots.R
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk ApplyVQSR\
+    --java-options "-Xmx50G"\
+    -R $ref \
+    -V /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/chr.all.avg.gq.vcf.gz \
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.snp.vcf.gz \
+    --truth-sensitivity-filter-level 99.0 \
+    --tranches-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_SNP.tranches \
+    --recal-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_SNP.recal \
+    -mode SNP
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk VariantRecalibrator\
+    --java-options "-Xmx50G"\
+    -R $ref \
+    -V /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/chr.all.avg.gq.vcf.gz \
+    --max-gaussians 4 \
+    --resource:mills,known=false,training=true,truth=true,prior=12.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \
+    --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 /project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf \
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -an InbreedingCoeff \
+    -mode INDEL \
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_INDEL.recal\
+    --tranches-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_INDEL.tranches \
+    --rscript-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_INDEL.plots.R
+
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk ApplyVQSR\
+    --java-options "-Xmx50G"\
+    -R $ref \
+    -V /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/chr.all.avg.gq.vcf.gz \
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.indel.vcf.gz \
+    --truth-sensitivity-filter-level 99.0 \
+    --tranches-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_INDEL.tranches \
+    --recal-file /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/output_INDEL.recal \
+    -mode INDEL
+
+#singularity run \
+#  --bind /project/lishaobo_902/sebastian/rhabdo/snp_dis:/snp_dis \
+#  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif
+  
+singularity exec \
+  --bind /project:/project\
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif\
+  gatk MergeVcfs\
+    --java-options "-Xmx64G"\
+    -I /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.snp.vcf.gz\
+    -I /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.indel.vcf.gz\
+    -O /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.vcf.gz
+
+bgzip -d /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.vcf.gz
+
+```
+
+filtering SNP calling with CNN 
+
+```{bash}
+
+   
+```
+
+
+
+```{bash annotate}
+
+#!/bin/bash
+#SBATCH --time=24:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --job-name=anno
+#SBATCH --output=/project/lishaobo_902/sebastian/rhabdo/snp_dis/output/anno_%A_%a.out
+#SBATCH --error=/project/lishaobo_902/sebastian/rhabdo/snp_dis/error/anno_%A_%a.errcd
+#SBATCH --mem=45G
+#SBATCH -c 20
+#SBATCH --ntasks=1
+
+module load gcc/11.3.0 htslib/1.14
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/annovar
+
+WGSNV=/project/desmith_488/sebastian/gatk/refs/snp_databases/cadd/whole_genome_SNVs.tsv.gz
+INDELS=/project/desmith_488/sebastian/gatk/refs/snp_databases/cadd/InDels.tsv.gz
+CADD=/project/desmith_488/sebastian/gatk/refs/snp_databases/cadd/cadd.hdr
+TOPMED=/project/desmith_488/sebastian/gatk/refs/snp_databases/topmed/bravo-dbsnp-all.tsv.gz
+
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar refGene humandb/
+#annotate_variation.pl -buildver hg38 -downdb cytoBand humandb/
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar exac03 humandb/ 
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar avsnp150 humandb/ 
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar dbnsfp42c humandb/
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar gnomad211_genome humandb/
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar gnomad211_exome humandb/
+#annotate_variation.pl -buildver hg38 -downdb -webfrom annovar clinvar_20210501 humandb/
+
+table_annovar.pl /project/lishaobo_902/sebastian/rhabdo/snp_dis/HaplotypeCaller/rhabdo.calling.vcf \
+  /project/wiemels_260/sebastian/dependencies/annovar/annovar/humandb/ \
+  -buildver hg38 \
+  -out annotated \
+  -remove \
+  -protocol refGene,cytoBand,exac03,avsnp150,dbnsfp42c,gnomad211_genome,gnomad211_exome,clinvar_20210501\
+  -operation g,r,f,f,f,f,f,f \
+  -vcfinput \
+  --dot2underline \
+  --polish -xref /project/wiemels_260/sebastian/dependencies/annovar/annovar/example/gene_fullxref.txt \
+  --thread 20 \
+  --nastring .
+
+awk '{gsub(/^chr/,""); print}' annotated.hg38_multianno.vcf > annotated.rhabdo.calling.no.chr.vcf
+bgzip annotated.rhabdo.calling.no.chr.vcf
+tabix annotated.rhabdo.calling.no.chr.vcf.gz
+
+bcftools annotate -a $INDELS -h $CADD -c Chrom,Pos,Ref,Alt,RawScore,PHRED annotated.rhabdo.calling.no.chr.vcf.gz -O z -o annotated.rhabdo.hg38_cadd_indel_output.vcf.gz --threads 20
+
+bcftools annotate -a $WGSNV -h $CADD -c Chrom,Pos,Ref,Alt,RawScore,PHRED annotated.rhabdo.hg38_cadd_indel_output.vcf.gz -O z -o annotated.rhabdo.hg38_cadd_wg_output.vcf.gz --threads 20
+tabix annotated.rhabdo.hg38_cadd_wg_output.vcf.gz
+bcftools annotate -a $TOPMED -h $CADD -c Chrom,Pos,Ref,Alt,TOPMED annotated.rhabdo.hg38_cadd_wg_output.vcf.gz -O z -o annotated.rhabdo.hg38.vcf.gz --threads 20
+tabix annotated.rhabdo.hg38.vcf.gz
+
+
+```
+
+```{r check out what SNPs were identified}
+
+setwd("/project/lishaobo_902/sebastian/rhabdo/snp_dis")
+library(tidyverse)
+library(data.table)
+library(vcfR)
+
+vcfR = read.vcfR("annovar/annotated.rhabdo.hg38.vcf.gz")
+
+vcf_data = vcfR2tidy(vcfR, dot_is_NA=TRUE, single_frame=TRUE)$dat %>% 
+  as.data.frame
+
+snp_summary = vcf_data %>%
+  mutate(ID = paste0(CHROM,":",POS,":",REF,":",ALT)) %>%
+  dplyr::select(ID,CHROM,POS,REF,ALT,Gene_refGene,gt_GT) %>%
+  separate(gt_GT,c("ale1","ale2")) %>%
+  mutate(mac = as.numeric(ale1)+as.numeric(ale2)) %>%
+  dplyr::select(-ale1,-ale2) %>%
+  group_by(ID,CHROM,POS,REF,ALT,Gene_refGene)
+
+snp_summarized = snp_summary %>%
+  summarize(mac_snp = sum(mac),
+            maf_snp = mac_snp/(n()*2)) 
+  
+snp_summarized_df = snp_summarized %>%
+  as.data.frame()
+
+anno_input = snp_summarized_df %>%
+  mutate(POS2=POS) %>%
+  arrange(CHROM,POS) %>%
+  dplyr::select(CHROM,POS,POS2,ALT,REF,ID)
+
+anno_input2 = snp_summarized_df %>%
+  mutate(POS2=POS) %>%
+  arrange(CHROM,POS) %>%
+  dplyr::select(CHROM,POS,POS2,REF,ALT,ID)
+  
+write.csv(snp_summarized_df,"all.snps.csv")
+
+write.table(anno_input,"plinks/rhabdo.hg38.input.anno.alt.ref.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+write.table(anno_input2,"plinks/rhabdo.hg38.input.anno.ref.alt.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+```
+
+
+```{bash convert output to PLINK and annotate with rs ID and MAF first}
+
+# bi-alleles only 
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis/plinks
+
+#annotate_variation.pl -out anno -build hg38 rhabdo.hg38.input.anno.txt /project/wiemels_260/sebastian/dependencies/annovar/annovar/humandb/
+annotate_variation.pl rhabdo.hg38.input.anno.alt.ref.txt -build hg38 -filter -dbtype avsnp150 /project/wiemels_260/sebastian/dependencies/annovar/annovar/humandb/ 
+annotate_variation.pl rhabdo.hg38.input.anno.ref.alt.txt -build hg38 -filter -dbtype avsnp150 /project/wiemels_260/sebastian/dependencies/annovar/annovar/humandb/ 
+
+# 170204 if ref alt
+# 1828 if alt ref
+
+```
+
+```{r combine all the generated files}
+
+setwd("/project/lishaobo_902/sebastian/rhabdo/snp_dis/plinks")
+library(tidyverse)
+library(data.table)
+
+snps1 = fread("rhabdo.hg38.input.anno.ref.alt.txt.hg38_avsnp150_dropped")%>%
+  as.data.frame() %>%
+  dplyr::mutate(ID = V8,
+                rsId = V2,
+                CHROM = V3,
+                POS = V4) 
+
+snps2 = fread("rhabdo.hg38.input.anno.alt.ref.txt.hg38_avsnp150_dropped")%>%
+  as.data.frame() %>%
+  dplyr::mutate(ID = V8,
+                rsId = V2,
+                CHROM = V3,
+                POS = V4) 
+
+snps = rbind(snps1,snps2) %>%
+  distinct(ID,.keep_all=TRUE) %>%
+  dplyr::select(rsId,CHROM,POS)
+
+snp_summarized_df = read.csv("../all.snps.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(-X) %>%
+  arrange(CHROM,POS) %>%
+  dplyr::left_join(snps,by=c("CHROM","POS")) %>%
+  mutate(gene_name = str_replace_all(Gene_refGene,"\\\\x",";")) %>%
+  dplyr::select(-mac_snp,-Gene_refGene)
+
+write.table(snp_summarized_df,"/project/lishaobo_902/sebastian/rhabdo/snp_dis/all.snps.annotated.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE)
+
+snp_df = read.csv("../all.snps.csv",row.names = 1) %>%
+  as.data.frame()
+
+write.table(snp_df,"../all.snps.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE)
+
+```
+
+look up analysis
+
+```{bash}
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis
+# PMID: 34095712
+# collaborator in Chicago: CBFB, RUNX1, RUNX2, RUNX3, NOTCH1
+# doi: https://doi.org/10.1101/2022.03.01.22271578
+
+#a1 = a %>% dplyr::distinct(V1,.keep_all=TRUE) %>% arrange(V1)
+#write.table(a1,"a1.txt",sep='\t',row.names=FALSE,col.names=FALSE,quote=FALSE)
+
+# 325 genes (TNFRSF6 (FAS) are split into 2)
+grep -wf gene.list.cancer.txt all.snps.txt > all.snps.selected.txt
+# 4576 / 188947
+
+```
+
+global and local ancestries of subjects
+
+```{bash Local ancestry regression in latino ancestry subjects}
+#Local ancestry regression in latino ancestry subjects using RFmix
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis
+
+for chr in {1..22};do
+  java -jar /project/wiemels_260/sebastian/dependencies/beagle5/conform-gt.24May16.cee.jar\
+    gt=/project/lishaobo_902/sebastian/rhabdo/snp_dis/annovar/annotated.rhabdo.hg38.vcf.gz\
+    ref=/project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz\
+    chrom=$chr\
+    match=POS\
+    out=/scratch2/lishaobo/rhabdo/$chr.rhabdo.hg38
+  
+  tabix /scratch2/lishaobo/rhabdo/$chr.rhabdo.hg38.vcf.gz
+  
+done    
+
+## converting ref vcf.gz file to bref3 files for faster phasing
+#for chr in {1..22};do
+#  java -jar /project/wiemels_260/sebastian/dependencies/beagle5/bref3.18May20.d20.jar\
+#    /project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz > #/project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.bref3
+#done
+
+## phase vcf files with beagle5
+for chr in {1..22};do
+  java -jar /project/wiemels_260/sebastian/dependencies/beagle5/beagle.18May20.d20.jar\
+      gt=/scratch2/lishaobo/rhabdo/$chr.rhabdo.hg38.vcf.gz\
+      ref=/project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.bref3\
+      out=/scratch2/lishaobo/rhabdo/$chr.rhabdo.hg38.query.phased\
+      map=/project/wiemels_260/sebastian/dependencies/beagle5/plink.GRCh38.map/plink.chr$chr.GRCh38.map
+  
+  tabix /scratch2/lishaobo/rhabdo/$chr.rhabdo.hg38.query.phased.vcf.gz
+    
+done  
+
+# count the number of SNPs per reviewer question
+#for chr in {1..22};do
+#  echo chr$chr
+#  bcftools stats $chr.query.phased.vcf.gz | grep "number of SNPs:"
+#done
+
+######################
+# A phased VCF/BCF file containing reference haplotypes (in any order)
+# ref panel has too many SNPs. Only include overlaps with lat
+
+cd /project/lishaobo_902/sebastian/rhabdo/snp_dis
+
+# sample_id90.txt includes five ancestries with the purest genetics
+
+plink --bfile /project/wiemels_494/sebastian/temp_scratch_backup/populationRisk2/hgdp_1kg\
+  --recode vcf bgz\
+  --keep sample_id90.txt\
+  --out /scratch2/lishaobo/rhabdo/panel.ref
+# 450 subjects, 90 from each ancestry
+
+## make reference data conforming to that of reference data
+for chr in {1..22};do
+  java -jar /project/wiemels_260/sebastian/dependencies/beagle5/conform-gt.24May16.cee.jar\
+    gt=/scratch2/lishaobo/rhabdo/panel.ref.vcf.gz\
+    ref=/project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz\
+    chrom=$chr\
+    match=POS\
+    out=/scratch2/lishaobo/rhabdo/$chr.panel.ref
+    
+    tabix /scratch2/lishaobo/rhabdo/$chr.panel.ref.vcf.gz
+
+done    
+
+## phase vcf files with beagle5
+for chr in {1..22};do
+  java -Xmx100g -jar /project/wiemels_260/sebastian/dependencies/beagle5/beagle.18May20.d20.jar\
+    gt=/scratch2/lishaobo/rhabdo/$chr.panel.ref.vcf.gz\
+    ref=/project/wiemels_260/sebastian/gwas_1000G/GRCh38/ALL.chr$chr.bref3\
+    out=/scratch2/lishaobo/rhabdo/$chr.panel.phased\
+    map=/project/wiemels_260/sebastian/dependencies/beagle5/plink.GRCh38.map/plink.chr$chr.GRCh38.map
+
+  tabix /scratch2/lishaobo/rhabdo/$chr.panel.phased.vcf.gz
+
+done  
+
+#for chr in {1..22};do
+#  echo chr$chr
+#  bcftools stats $chr.panel.phased.vcf.gz | grep "number of SNPs:"
+#done
+
+######################
+# Manipulating map file for rfmix
+#chr=1
+#awk -v OFS='\t' '{print $1,$4,$3}' /project/wiemels_260/sebastian/dependencies/beagle5/plink.GRCh38.map/plink.chr$chr.GRCh38.map > #/project/wiemels_260/sebastian/dependencies/rfmix/rfmix.GRCh38.map/rfmix.GRCh38.map
+#for chr in {2..22};do
+#  awk -v OFS='\t' '{print $1,$4,$3}' /project/wiemels_260/sebastian/dependencies/beagle5/plink.GRCh38.map/plink.chr$chr.GRCh38.map >> #/project/wiemels_260/sebastian/dependencies/rfmix/rfmix.GRCh38.map/rfmix.GRCh38.map
+#done
+
+```
+
+```{bash script for rfmix, bcf file}
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=END
+#SBATCH --job-name=rgnbcf
+#SBATCH --array=1-22
+#SBATCH --mem=160G
+
+#sbatch /project/wiemels_260/sebastian/gwas_glioma/codes/temp3.sh
+
+cd /scratch2/lishaobo/rhabdo/
+
+# creating bcf files for rfmix running
+
+bcftools view -o ${SLURM_ARRAY_TASK_ID}.query.bcf -Ob\
+  --threads 200\
+  ${SLURM_ARRAY_TASK_ID}.rhabdo.hg38.query.phased.vcf.gz
+bcftools index -f ${SLURM_ARRAY_TASK_ID}.query.bcf
+
+bcftools view -o ${SLURM_ARRAY_TASK_ID}.panel.bcf -Ob\
+  --threads 200\
+  ${SLURM_ARRAY_TASK_ID}.panel.phased.vcf.gz
+bcftools index -f ${SLURM_ARRAY_TASK_ID}.panel.bcf
+
+rfmix\
+    -f ${SLURM_ARRAY_TASK_ID}.query.bcf\
+  	-r ${SLURM_ARRAY_TASK_ID}.panel.bcf\
+  	-m /project/lishaobo_902/sebastian/rhabdo/snp_dis/sample_id90.txt\
+  	-g /project/wiemels_260/sebastian/dependencies/rfmix/rfmix.GRCh38.map/rfmix.GRCh38.map\
+  	-o ${SLURM_ARRAY_TASK_ID}.bcf.rgn.rhabdo\
+  	--chromosome=${SLURM_ARRAY_TASK_ID}
+
+```
+
+
+

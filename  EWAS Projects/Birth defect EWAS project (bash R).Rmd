@@ -1,0 +1,549 @@
+---
+title: "birthDefect"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Project description: to conduct an EWAS analysis of the associations betwee DNA methylation and birth defects
+
+Down syndrome controls (non-ALL subjects)
+
+EWAS for the following variables
+1) Major_heart_defect
+2) Tetralogy_fallot (a special type of heart defect, only 3 “cases” but I think worth checking anyway)
+3) Major_defects (includes heart plus other defects, this could be done as a linear regression as the variable ranges from 0-10) 
+
+```{r M value then bacon including the 18 washington cases}
+
+setwd("~/ewas/birthDefects")
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+library(minfi)
+library(impute)
+library(wateRmelon)
+library(bacon)
+library(lumi)
+
+cl <- makeCluster(40, type="FORK")
+clusterEvalQ(cl,library(MASS))
+clusterEvalQ(cl,library(lmtest))
+
+logistic.fun <- function(meth, var, cov){
+
+    #meth= methylt[1,]
+    #cov = covs
+    #var=var
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth)) %>%
+      filter(!is.na(meth)) 
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+linear <- function(meth,var,cov){
+  
+  #meth= methylt[1,]
+  #cov = covs
+  #var=var
+  
+  dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth)) %>%
+      filter(!is.na(meth)) 
+  ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  if (class(mod)=="lm") {
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    t.value = coefs[2,"t value"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, t.value, p.value, N)
+  } else {
+    out = c(rep(NA,4), N)
+  }
+  names(out) = c("Beta","SE", "t", "P", "N")
+  return(out)
+}
+
+# Winsorize beta values
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+
+
+for(var in c("Major_defects","Major_heart_defect","Tetralogy_fallot")){
+
+  print(var)
+   #var = 'Major_heart_defect'
+   #Major_defects","Major_heart_defect","Tetralogy_fallot"   
+   
+  covs = fread("raw/birthDefect.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(EPIC_beadPosition,one_of(var),CD8T_IDOL,CD4T_IDOL,NK_IDOL,Bcell_IDOL,
+                  Mono_IDOL,nRBC_IDOL,ethnicity,sex,EPIC_plate) %>%
+    mutate(EPIC_plate=as.factor(EPIC_plate),
+           sex=as.factor(sex),
+           ethnicity=as.factor(ethnicity)) %>%  
+    na.omit()
+  rownames(covs) = c()
+  covs = covs %>%
+    column_to_rownames(var="EPIC_beadPosition")
+  
+  betas3_0 = fread("~/sets/set3/set3_Sesame_beta.csv") %>%
+    as.data.frame()%>%
+    dplyr::select(-V1)
+  betas3_0 = betas3_0[,c("probeId",rownames(covs))]
+  betas3_1 = betas3_0 %>%
+    column_to_rownames(var="probeId")
+  print(dim(betas3_1))
+  
+  # betas3_1 = betas3_1[1:2000,] #for testing purpose
+  
+  betas3_1_1 = betas3_1[rowMeans(is.na(betas3_1))<0.05,] 
+  print(dim(betas3_1_1))
+  
+  betas3_1_2 = betas3_1_1[,colMeans(is.na(betas3_1_1))<0.05] 
+  print(dim(betas3_1_2))
+  
+  betaFileImp = impute.knn(as.matrix(betas3_1_2))$data %>% as.data.frame()
+  noob.to.include.M = beta2m(betaFileImp) %>% as.matrix()
+  replace.outliers <- winsorize(noob.to.include.M, 0.01)
+  methyl <- replace.outliers$methylation
+  outlier.log <- replace.outliers$log
+  
+  subsinthestudy = intersect(colnames(methyl),rownames(covs))
+  
+  covs = covs[subsinthestudy,] 
+  methyl = methyl[,subsinthestudy]
+  
+  write_rds(covs,paste0("birthdef.",var,".covs.rds"))
+  write_rds(methyl,paste0("birthdef.",var,".methyl.rds"))
+  
+  # covs = read_rds(paste0("birthdef.",var,".covs.rds"))
+  # methyl = read_rds(paste0("birthdef.",var,".methyl.rds")) 
+  
+  print(table(covs[var]))
+  
+  if((identical(rownames(covs),colnames(methyl))==TRUE)&(length(table(covs[var])>1))){
+  
+    # methylt = methyl[1:100,] 
+    # results = t(apply(methylt,1,logistic.fun,var,covs))
+    
+    if(var=="Major_defects"){
+      results <- t(parApply(cl, methyl, 1, linear, var,covs))
+    }else{
+      results <- t(parApply(cl, methyl, 1, logistic.fun, var,covs))
+    } 
+    
+    results <- as.data.frame(results) %>%
+      na.omit()
+    
+    write.table(results,paste0("birthdef.",var,".methyl.txt"),
+          quote=FALSE,
+          sep='\t')  
+  }
+}
+  
+stopCluster(cl)
+
+#####################################################################
+# looking at the results
+
+setwd("~/ewas/birthDefects")
+library(tidyverse)
+library(data.table)
+#library(bacon)
+library(CMplot)
+library(QCEWAS)
+library(qqman)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf)
+
+for(var in c("Major_defects","Major_heart_defect","Tetralogy_fallot")){
+  
+  #var='Major_heart_defect'
+  print("result checking")
+  print(var)
+    
+  results <- fread(paste0("birthdef.",var,".methyl.txt")) %>% 
+    dplyr::rename("cpg"="V1") %>%
+    dplyr::filter(grepl('cg', cpg)) %>%
+    filter(!is.na(P))%>% 
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>%  
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>% 
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))  
+  
+  #results$bacon_P = pval(bacon(results$Z,na.exclude = TRUE))
+  
+  results <- results %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+  
+  write.csv(results,paste0("birthdef.",var,".methyl.anno.csv"))
+  
+  print(0.05/nrow(results)) # bonferroni threshold
+  
+  print("raw P values")
+  Nbeta <- sum(!is.na(results$P))
+  tmp <- results[!is.na(results$P),]
+  lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  print(round(lambda, 2))
+  
+  # print("bacon P values")
+  # Nbeta <- sum(!is.na(results$bacon_P))
+  # tmp <- results[!is.na(results$bacon_P),]
+  # lambda = median(qchisq(1- tmp$bacon_P,1))/qchisq(0.5,1)
+  # print(round(lambda, 2))
+  
+  # figures (qq plot and manhattan)
+  
+  usc_model_anno <- results %>%
+    dplyr::mutate(cpg_name=cpg,estimate=Beta, std_error=SE,p_val=P)
+  
+  sig_thresghold = usc_model_anno %>%
+    filter(fdr<0.05)%>%
+    arrange(desc(P))
+  sig_threshold = sig_thresghold[1,"p_val"]
+  
+  annotation = usc_model_anno%>%
+    filter(bf<0.05) %>%
+    filter(UCSC_RefGene_Name!="") %>%
+    mutate(gene.highlight = sub(";.*$","",UCSC_RefGene_Name))
+  cpg.highlight = annotation$cpg_name
+  genes.highlight = annotation$gene.highlight
+  
+  outcomes_model_CM_plot <- usc_model_anno%>%
+    dplyr::mutate(p_val_cmplot = -log10(p_val))%>%
+    dplyr::mutate(p_val_cmplot= ifelse(estimate<0,-p_val_cmplot, p_val_cmplot )) %>%
+    dplyr::select(cpg_name, chr,pos, p_val_cmplot)
+  outcomes_model_CM_plot$chr <- gsub("chr","",outcomes_model_CM_plot$chr)
+  
+  CMplot(outcomes_model_CM_plot,
+         plot.type="m",
+         band=0, 
+         cex=c(0.5,0.5,0.5),
+         amplify=FALSE,
+         #LOG10=FALSE,  
+         signal.col=NULL,
+         chr.den.col=NULL,
+         #threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
+         #threshold.lty=2, 
+         #threshold.lwd=1, 
+         #threshold.col="black", 
+         highlight=cpg.highlight,
+         highlight.text=genes.highlight, 
+         file="jpg",
+         memo=paste0("birthdef.",var),
+         dpi=500,file.output=TRUE,verbose=TRUE)
+  
+  outcomes_model_qq <- usc_model_anno %>% 
+    dplyr::select(cpg_name,p_val)%>%
+    dplyr::mutate(ID=cpg_name, P=p_val)
+  lambda <- P_lambda(outcomes_model_qq$P)
+  
+  png(paste0(var,".qq.m.png"))
+  #tiff("usc.sesame.qq.m.tiff", width = 10, height = 7, units = 'in', res = 300)
+  qq(outcomes_model_qq$P)
+  dev.off()
+  
+  ## top CpGs
+  print(head(results))
+  
+  print("fdr")
+  print(dim(results%>%filter(fdr<0.05)))
+  
+  print("bonferroni")
+  print(dim(results%>%filter(bf<0.05)))
+  
+  print(results%>%filter(fdr<0.05))
+}
+
+
+
+```
+
+```{r DMR analysis}
+
+setwd("~/ewas/birthDefects")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+for(var in c("Major_defects","Major_heart_defect")){
+  
+  # var = "Major_heart_defect"
+  file = paste0("birthdef.",var,".methyl.txt")
+  
+  raw <- fread(file)
+  raw1 <- raw %>% 
+    as.data.frame() %>%
+    dplyr::rename("probe"="V1") %>%
+    mutate(p = P) %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    filter(chr %in% c(1:22)) %>%
+    na.omit()
+  if(length(which(raw1$p==0))!=0) raw1$p[which(raw1$p==0)] = min(raw1$p[-which(raw1$p==0)])/100
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+  
+  file.figure = sub("birthdef.","",file) %>% sub(".txt","",.)
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(file.figure,"_region_plot.pdf"))
+  } else {
+   cat("plotting seems to have failed")
+  }
+  
+  dmr = read.csv("resu_ipdmr.csv") %>%
+    filter(nprobe>1)
+  
+  comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field="end",
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  
+  if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+  try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+      silent=TRUE)
+  }
+  
+  if(exists("comb_p_GR_DF")){
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+  
+    betasAll = raw %>%
+      filter(!is.na(P))%>%
+      mutate(CpG = V1) %>%
+      dplyr::select(CpG,Beta) %>%
+      left_join(annoEPIC,by=c("CpG"="probe")) %>%
+      arrange(chr,start)%>%
+      na.omit()
+  
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Beta))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    file.dmr = sub("birthdef","dmr",file) %>% sub(".txt",".csv",.)
+    write.csv(dmr_w_beta,file.dmr)
+    rm(comb_p_GR_DF)
+    
+  }else{
+    
+    file.dmr = sub("birthdef","dmr",file) %>% sub(".txt",".csv",.)
+    dmr_wo_beta = as.data.frame(comb_p_GR)
+    write.csv(dmr_wo_beta,file.dmr)
+    
+  }
+}
+
+
+```
+
+```{r sex check}
+
+setwd("~/ewas/birthDefects")
+
+library(tidyverse)
+library(data.table)
+
+covs_adm = fread("raw/birthDefect.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(subjectId,sex) %>%
+  na.omit()
+
+covs_mine = fread("~/sets/set3/clinical_variables.csv") %>%
+  dplyr::select(subjectId,sex) %>%
+  inner_join(covs_adm,by='subjectId')
+
+table(covs_mine$sex.x,covs_mine$sex.y)
+
+```
+
+```{r chr21 and DYRK1A}
+
+setwd("~/ewas/birthDefects")
+
+library(tidyverse)
+library(data.table)
+
+for( var in c("Major_defects","Major_heart_defect")){
+  
+  #var = 'Major_defects'
+ allres = fread(paste0("birthdef.",var,".methyl.anno.csv")) %>%
+   dplyr::select(-V1) %>%
+   dplyr::rename("fdr_wholeGenome"="fdr",
+                 "bf_wholeGenome"="bf") %>%
+   mutate(model={var})
+
+ chr21 = allres %>%
+   filter(chr=='chr21') %>%
+   arrange(P) %>%
+   mutate(fdr_local=p.adjust(P, method = "fdr", n=length(P))) 
+
+ DYRK1A = allres %>%
+   filter(grepl('DYRK1A',UCSC_RefGene_Name)) %>%
+   arrange(P) %>%
+   mutate(fdr_local=p.adjust(P, method = "fdr", n=length(P))) 
+   
+ lookups = rbind(head(chr21,10),head(DYRK1A,10)) %>% as.data.frame()
+ 
+ write.csv(lookups,paste0("lookups.chr21.and.DYRK1A.top10.",var,".csv"))
+
+ }
+
+
+
+```
+
+```{r cell proportions and birth defect}
+
+setwd("~/ewas/birthDefects")
+
+library(tidyverse)
+library(data.table)
+library(broom)
+
+clinical <- fread("raw/birthDefect.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(subjectId,Major_defects,Major_heart_defect,AVSD,Tetralogy_fallot,
+                CD8T_IDOL,CD4T_IDOL,NK_IDOL,Bcell_IDOL,Mono_IDOL,Gran_IDOL,nRBC_IDOL,
+                epi1,epi2,epi3,sex,EPIC_plate) %>%
+  mutate(EPIC_plate=as.factor(EPIC_plate)) %>%
+  na.omit()
+
+cellP <- data.frame()
+
+j = 1
+for(var in c("Major_defects","Major_heart_defect","AVSD","Tetralogy_fallot")){
+  
+  smokingDF <- clinical %>%
+    dplyr::select(subjectId,one_of(var),
+                  CD8T_IDOL,CD4T_IDOL,NK_IDOL,Bcell_IDOL,Mono_IDOL,Gran_IDOL,nRBC_IDOL,
+                  epi1,epi2,epi3,sex,EPIC_plate) %>%
+    na.omit()
+
+  
+  for(i in  c("CD8T_IDOL","CD4T_IDOL","NK_IDOL","Bcell_IDOL","Mono_IDOL","Gran_IDOL","nRBC_IDOL")){
+    
+    lm1 <- lm( smokingDF[,i] ~ smokingDF[,var] + smokingDF$sex + smokingDF$EPIC_plate + smokingDF$epi1 + smokingDF$epi2 + smokingDF$epi3)%>%
+    tidy() %>% as.data.frame()
+    cellP[j , 1] <- i
+    cellP[j , 2] <- lm1[2,2]
+    cellP[j , 3] <- lm1[2,3]
+    cellP[j , 4] <- lm1[2,4]
+    cellP[j , 5] <- lm1[2,5]
+    cellP[j , 6] <- var
+    j = j+1
+  }
+  
+}
+colnames(cellP) <- c("cell_name","estimate_3epi","stderror_3epi","stat_3epi","pvalue_3epi","variable")
+
+write.csv(cellP,"cell.proportions.and.defects.csv")
+
+```
+

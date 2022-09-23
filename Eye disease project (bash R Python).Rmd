@@ -1,0 +1,5662 @@
+---
+title: "eyeDisease"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+Project description: Investigating the associations with neonatal DNA methylation data and childhood eye diseases (hyperopia, exotropia, esotropia, decreased vision and astigmatism).
+
+(1) Comparing deconvoluted cell proportions, epigenetic aging and telomere lengths in cases and controls
+(2) Using EWAS models to investigate the associations between each CpG and phenotypes
+(3) Using neural network models (including simple neural network, convolutional neural network, recurrent neural network) to predict disease risk with multiple CpGs
+
+
+```{bash}
+
+cd /project/wiemels_494/sebastian/eyeDisease/raw
+
+mv 009_0387_1/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch1_1_SampleAnnotation.txt
+mv 009_0387_1/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch1_2_VariableAnnotation.txt
+mv 009_0387_2/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch2_1_SampleAnnotation.txt
+mv 009_0387_2/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch2_2_VariableAnnotation.txt
+mv 009_0387_3/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch3_1_SampleAnnotation.txt
+mv 009_0387_3/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch3_2_VariableAnnotation.txt
+mv 009_0387_4/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch4_1_SampleAnnotation.txt
+mv 009_0387_4/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch4_2_VariableAnnotation.txt
+mv 009_0387_5/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch5_1_SampleAnnotation.txt
+mv 009_0387_5/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch5_2_VariableAnnotation.txt
+mv 009_0387_6/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch6_1_SampleAnnotation.txt
+mv 009_0387_6/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch6_2_VariableAnnotation.txt
+mv 009_0387_7_2nd/009_0387_7/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch7_1_SampleAnnotation.txt
+mv 009_0387_7_2nd/009_0387_7/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch7_2_VariableAnnotation.txt
+mv 009_0387_8/raw_data/1_SampleAnnotation.txt 009_0387_1/raw_data/batch8_1_SampleAnnotation.txt
+mv 009_0387_8/raw_data/2_VariableAnnotation.txt 009_0387_1/raw_data/batch8_2_VariableAnnotation.txt
+
+
+mv 009_0387_1/raw_data/* all_batches
+mv 009_0387_2/raw_data/* all_batches
+mv 009_0387_3/raw_data/* all_batches
+mv 009_0387_4/raw_data/* all_batches
+mv 009_0387_5/raw_data/* all_batches
+mv 009_0387_6/raw_data/* all_batches
+mv 009_0387_7_2nd/009_0387_7/raw_data/* all_batches
+mv 009_0387_8/raw_data/* all_batches
+
+cd /project/wiemels_494/sebastian/eyeDisease/raw/all_batches
+mv */*.idat idats
+
+head -1 batch1_1_SampleAnnotation.txt > SampleAnnotation.txt
+tail -n +2 -q batch?_1_SampleAnnotation.txt >> SampleAnnotation.txt
+
+
+
+
+```
+
+```{r minfi QC and rgset}
+
+library(minfi)
+library(minfiData)
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICmanifest)
+library(AnnotationHub)
+library(FlowSorted.Blood.EPIC)
+library(wateRmelon)
+
+#setwd("~/sets/eyes/")
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+# preparing targets file
+all.files =data.frame(targets=list.files("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/idats")) %>%
+  mutate(targets = sub("_Grn.idat$","",targets),
+         targets = sub("_Red.idat$","",targets)) %>%
+  distinct(targets,.keep_all = TRUE) %>%
+  mutate(Basename = paste0("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/idats/",targets))
+write.csv(all.files,"targets.csv")
+
+targetsU <- read.csv("targets.csv")
+RGset <- read.metharray.exp(targets = targetsU)
+write_rds(RGset,"RGset.rds")
+
+## detailed diagnostic plots 
+RGset = read_rds("RGset.rds")
+MSet <- preprocessRaw(RGset) 
+qc <- getQC(MSet)
+
+png("qcs/qcplot.eye.png")
+plotQC(qc)
+dev.off()
+
+
+png("qcs/density.eye.png")
+densityPlot(MSet)
+dev.off()
+
+beta <- getBeta(MSet) %>% na.omit(.,na.action="replace",fill=0)
+b.den = colMedians(beta)
+subject = colnames(beta)[which.min(b.den)]
+
+mset.abnormal =  MSet[,subject]
+png("qcs/bean.205648300043_R01C01.eye.png")
+densityBeanPlot(mset.abnormal)
+dev.off()
+
+controlStripPlot(RGset[,subject], 
+                 controls = "BISULFITE CONVERSION I")
+controlStripPlot(RGset[,subject], 
+                 controls = "BISULFITE CONVERSION II")
+
+png("qcs/mds.eye.png")
+mdsPlot(RGset)
+dev.off()
+
+GMset <- mapToGenome(MSet)
+predictedSex <- getSex(GMset, cutoff = -2)
+write.csv(predictedSex,"predictedSex.eye.csv")
+
+# some samples cannot be matched (resolved)
+# targets = read.csv("targets.csv")
+# # 1464
+# raw1 = fread("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/SampleAnnotation.txt",
+#               skip=1,header=FALSE,fill=TRUE)
+# # 1465
+# 
+# raw1$V1[which(!raw1$V1 %in% targets$targets)]
+# #  [1] "205617020157_R01C01" "205617020157_R02C01" "205617020157_R03C01"
+# #  [4] "205617020157_R04C01" "205617020157_R05C01" "205617020157_R06C01"
+# #  [7] "205617020157_R07C01" "205617020157_R08C01" "204617080032_R01C01"
+# # [10] "204617080032_R02C01" "204617080032_R03C01" "204617080032_R04C01"
+# # [13] "204617080032_R05C01" "204617080032_R06C01" "204617080032_R07C01"
+# # [16] "204617080032_R08C01" ""   
+# 
+# targets$targets[which(!targets$targets %in% raw1$V1)]
+# #  [1] "205617080032_R01C01" "205617080032_R02C01" "205617080032_R03C01"
+# #  [4] "205617080032_R04C01" "205617080032_R05C01" "205617080032_R06C01"
+# #  [7] "205617080032_R07C01" "205617080032_R08C01" "205617080157_R01C01"
+# # [10] "205617080157_R02C01" "205617080157_R03C01" "205617080157_R04C01"
+# # [13] "205617080157_R05C01" "205617080157_R06C01" "205617080157_R07C01"
+# # [16] "205617080157_R08C01"
+
+# generation of the phenotype file
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+raw0 = readxl::read_excel("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/combined_array_position_8_16_2021.xlsx")
+raw1 = fread("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/SampleAnnotation.txt",
+             skip=1,header=FALSE,fill=TRUE)
+colnames(raw1) = c("beadPosition","matchID")
+raw2 = fread("/project/wiemels_494/sebastian/eyeDisease/methyl/predictedSex.eye.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(V1,predictedSex)
+
+useptid = which(raw0$ptid %in% raw1$matchID)
+useptid_cdph = which(raw0$ptid_cdph %in% raw1$matchID)
+
+raw0$matchID = 0
+raw0$matchID[useptid] = raw0$ptid[useptid]
+raw0$matchID[useptid_cdph] = raw0$ptid_cdph[useptid_cdph]
+raw0 = raw0 %>% distinct(matchID,.keep_all=TRUE)
+
+combined = raw0 %>%
+  inner_join(raw1,by="matchID") %>%
+  inner_join(raw2,by=c("beadPosition"="V1"))
+
+table(combined$predictedSex,combined$gender)                          
+#     1    2
+# F   4   737
+# M  721  1
+  
+sexWrong = combined %>%
+  filter((predictedSex=="F"&gender==1) |(predictedSex=="M"&gender==2)) %>%
+  as.data.frame()
+# write.csv(sexWrong,"sexWrong.csv")
+
+failSexQcsub = sexWrong$beadPosition
+failMinfiQCsub="205648300043_R01C01" # this is also a sex mismatch
+
+allDrops = c(failSexQcsub,failMinfiQCsub) %>% unique() 
+
+combined$hyperopia_b_ind = 0
+combined$hyperopia_b_ind[combined$hyperopia_b==1] = 1
+
+combined$astigm2g_b_ind = 0
+combined$astigm2g_b_ind[combined$astigm2g_b==1] = 1
+
+combined$esotropia_ind = 0
+combined$esotropia_ind[combined$esotropia==1] = 1
+
+combined$exotropia_ind = 0
+combined$exotropia_ind[combined$exotropia==1] = 1
+
+combined$bi_decreased_vision_ind = 0
+combined$bi_decreased_vision_ind[combined$bi_decreased_vision==1] = 1
+
+combined_post_qc = combined %>%
+  filter(!beadPosition %in% allDrops) %>%
+  mutate(diseases = hyperopia_b_ind+astigm2g_b_ind+exotropia_ind+exotropia_ind+bi_decreased_vision_ind)%>%
+  dplyr::select(-bi_decreased_vision_ind,-hyperopia_b_ind,-astigm2g_b_ind,-exotropia_ind,-esotropia_ind)
+# [1] 1459   37
+
+write.csv(combined_post_qc,"/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv")
+
+#combined_post_qc = fread("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv")
+```
+
+######################################################################## 
+
+# on UCB HPC and do the sesame normalization
+
+cd /ccls/home/sli/dependencies/r_self/ \*install R new version on
+Berkeley HPC wget
+<https://cran.r-project.org/src/base/R-4/R-4.1.2.tar.gz>
+
+./configure\
+--prefix=/ccls/home/sli/dependencies/r_self/R-4.1.2\
+--enable-memory-profiling\
+--enable-R-shlib\
+--with-blas\
+--with-lapack\
+--with-readline=no\
+--with-x=no make make install
+
+cd \~/sets/eyes /ccls/home/sli/dependencies/r_self/R-4.1.2/bin/./R
+
+-   library location: /ccls/home/sli/dependencies/r_self/R-4.1.2/library
+
+export TMPDIR=/ccls/home/sli/tempos export
+EXPERIMENT_HUB_CACHE=/ccls/home/sli/.cache/R/ExperimentHub export
+PATH="/ccls/home/sli/dependencies/r_self/R-4.1.2/bin:\$PATH"
+
+/ccls/home/sli/dependencies/r_self/R-4.1.2/bin/./R setwd("\~/sets/eyes")
+
+######################################################################## 
+
+# on USC HPC and do the sesame normalization
+
+```{r normalization of methylation sesame}
+
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+# export EXPERIMENT_HUB_CACHE=/home1/lishaobo/.cache/R/ExperimentHub
+# R
+
+# module load bzip2 curl htslib
+
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+#tools::R_user_dir("ExperimentHub", which="cache")
+#[1] "/home1/lishaobo/.cache/R/ExperimentHub"
+
+library(sesame)
+library(tidyverse)
+#sesameDataCacheAll()
+
+#idat_dir = system.file("extdata/", package = "sesameData")
+#betas = openSesame(idat_dir)
+
+idat_dir = "idats"
+betas = openSesame(idat_dir, BPPARAM=BiocParallel::MulticoreParam(20))
+
+write_rds(betas,"eye.methyl.sesame.rds")
+
+# do imputation in regular R
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(impute)
+library(tidyverse)
+library(data.table)
+
+subs = fread("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv")
+# 1459
+
+betas <- read_rds("eye.methyl.sesame.rds") #  865918   1464
+beta_1 <- betas[rowMeans(is.na(betas))<0.05, ] # 717427   1464
+beta_2 <- beta_1[,colMeans(is.na(beta_1))<0.05] # 717427   1458
+
+final.subs = intersect(subs$beadPosition,colnames(beta_2))
+length(final.subs) # 1458
+
+subs1 = subs %>% 
+  dplyr::filter(beadPosition %in% final.subs)
+
+beta_3 <- beta_2[,final.subs]
+set.seed(1) 
+beta_4 <- impute.knn(as.matrix(beta_3))$data
+
+write.csv(subs1,"/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.post.qc.csv")
+
+write_rds(beta_4,"/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+
+```
+
+```{r duplicates validation}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+betas = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+
+subs = fread("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv") %>%
+  filter(grepl("9999",setnumber))
+
+intersect(colnames(betas),subs$beadPosition) %>% length()
+# 12, all duplicates passed QCs
+
+idGroups = unique(subs$setnumber)
+
+for(set in idGroups){
+  
+  # set = 99993
+  beads = subs %>% filter(setnumber==set) %>% dplyr::select(beadPosition)
+  betasSelect = betas[,beads$beadPosition]
+  
+  colnames(betasSelect) = c('dup1','dup2')
+  # [1]dup1: "205624890179_R07C01", dup2:"205657390060_R07C01"
+
+  betasSelect %>%
+    as.data.frame() %>%
+    ggplot(aes(x=dup1,y=dup2))+
+    geom_point(alpha = 1/5,color='turquoise',shape=4)+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    theme_bw()+
+    theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14),
+          plot.margin=unit(c(5.5, 19, 5.5, 5.5), "points"))
+    ggsave(paste0("qcs/",set,".dup.plot.png"), width = 8,height = 6)
+}
+
+## investigate set 99993
+set = 99993
+beads = subs %>% filter(setnumber==set) %>% dplyr::select(beadPosition)
+betasSelect = betas[,beads$beadPosition]
+colnames(betasSelect) = c('dup1','dup2')
+beatsFilter1 = betasSelect[betasSelect[,1]>0.622&betasSelect[,1]<0.623&(betasSelect[,2]<0.25|betasSelect[,2]>0.75),]
+beatsFilter1 %>%
+    as.data.frame() %>%
+    ggplot(aes(x=dup1,y=dup2))+
+    geom_point(alpha = 1/5,color='turquoise',shape=4)+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    theme_bw()
+  
+nrow(beatsFilter1)
+# 2181
+
+betasRaw = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.rds")
+betasRaw = betasRaw[rownames(beatsFilter1),"205624890179_R07C01"]
+
+```
+
+# DECONVOLUTION
+
+```{r DECONVOLUTION OF CELL TYPES}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+library(readr)
+library(FlowSorted.Blood.EPIC)
+
+FlowSorted.CordBloodCombined.450k <- read_rds("/project/wiemels_260/sebastian/sets/set3/deconvolution/FlowSorted.CordBloodCombined.450k.rds")
+RGset <- read_rds("RGset.rds")
+IDOLOptimizedCpGsCordBlood <- read_rds("/project/wiemels_260/sebastian/sets/set3/deconvolution/IDOLOptimizedCpGsCordBlood.rds")
+
+IDOL_DECON<-estimateCellCounts2(RGset,
+ compositeCellType = "Blood",
+ processMethod = "preprocessNoob",
+ probeSelect = "IDOL",
+ cellTypes = c("CD8T", "CD4T", "NK",
+ "Bcell", "Mono", "Gran", "nRBC"),
+ referencePlatform =
+ "IlluminaHumanMethylationEPIC",
+ referenceset =
+ "FlowSorted.CordBloodCombined.450k",
+ IDOLOptimizedCpGs =
+ IDOLOptimizedCpGsCordBlood,
+ returnAll = FALSE)
+
+IDOL_DECON1 = IDOL_DECON$counts %>% as.data.frame %>%
+  rownames_to_column(var="beadPosition")
+
+write_rds(IDOL_DECON1,"eye_disease_IDOL_DECON.rds")
+
+IDOL_DECON1 %>%
+  reshape::melt(id="beadPosition") %>%
+  dplyr::rename("cellType"="variable","cellProportion"="value") %>%
+  ggplot(aes(x=cellType, y=cellProportion,fill=cellType)) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_bw() +
+  ggtitle("Cell proportions in eye project samples")+
+  xlab("Cell Types") +
+  ylab("Proportions") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("Cell_proportions_in_eye_project.png",width = 8,height = 6)
+
+
+```
+
+```{r shiny}
+
+# shiny interactive figures
+setwd("/project/wiemels_494/sebastian/eyeDisease")
+#library(shiny)
+library(shinyMethyl)
+#library(minfi)
+#library(minfiData)
+library(tidyverse)
+library(data.table)
+#RGset = read_rds("RGset.rds")
+#summary <- shinySummarize(RGset)
+#write_rds(summary,"summary.shiny.eye.rds")
+summary = read_rds("summary.shiny.eye.rds")
+runShinyMethyl(summary)
+
+```
+
+# epistructure and refractor
+
+```{r prepare for glint files}
+
+library(data.table)
+library(tidyverse)
+library(fastDummies)
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+#setwd("~/sets/eyes/")
+
+getcpgs1 = fread("/project/wiemels_260/sebastian/dependencies/glint/parsers/assets/epistructure_reference_sites.txt",header=FALSE)
+colnames(getcpgs1) = "ID"
+getcpgs2 = fread("/project/wiemels_260/sebastian/dependencies/glint/parsers/assets/12859_2016_943_MOESM5_ESM_ref.txt") %>%
+  as.data.frame() %>%
+  dplyr::select(ID)
+getcpgs = rbind(getcpgs1,getcpgs2) %>%
+  as.data.frame() %>%
+  distinct(ID,.keep_all = TRUE)
+nrow(getcpgs)
+# [1] 5212
+
+glint_0 <- read_rds("eye.methyl.sesame.imputed.rds") 
+glint_0 <- glint_0[rownames(glint_0)%in%getcpgs$ID,]
+  
+clinical_0 <- read.csv("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.post.qc.csv")
+
+clinical_1 = clinical_0 %>%
+  dplyr::select(beadPosition,AGE,gender,EPIC_Plate,esotropia,exotropia) %>%
+  na.omit() %>%
+  column_to_rownames(var="beadPosition")
+
+subjectsCon = intersect(clinical_0$beadPosition,colnames(glint_0))
+length(subjectsCon)
+
+dataF = glint_0[grepl("cg",rownames(glint_0)),subjectsCon]
+
+clinical_2 = clinical_1[subjectsCon,]
+
+phenoF = clinical_2 %>%
+  dplyr::select(esotropia,exotropia)
+
+covF = clinical_2 %>%
+  rownames_to_column(var="beadPosition") %>%
+  dplyr::select(beadPosition,AGE,gender,EPIC_Plate) %>%
+  mutate(EPIC_Plate=as.factor(EPIC_Plate))%>%
+  dummy_cols(select_columns="EPIC_Plate") %>%
+  dplyr::select(-EPIC_Plate) %>%
+  column_to_rownames(var="beadPosition") 
+
+identical(rownames(covF),rownames(phenoF))
+identical(rownames(covF),colnames(dataF))
+
+write.table(dataF,"glintRaw/datafile.txt",quote=FALSE)
+write.table(phenoF,"glintRaw/phenotypes.txt",quote=FALSE)
+write.table(covF,"glintRaw/covariates.txt",quote=FALSE)
+
+
+```
+
+-   wget
+    <https://github.com/cozygene/glint/releases/download/1.0.4/GLINT_1.0.4.zip>
+    salloc --time=10:00:00 --mem 180g
+
+module load python/2.7.16
+
+```{bash epistructure and refractor}
+
+cd /project/wiemels_494/sebastian/eyeDisease/methyl/glint
+
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile ../glintRaw/datafile.txt \
+  --covarfile ../glintRaw/covariates.txt \
+  --phenofile ../glintRaw/phenotypes.txt \
+  --gsave
+  
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile datafile.glint \
+  --refactor --k 10 \
+  --covar AGE gender EPIC_Plate_1 EPIC_Plate_2 EPIC_Plate_3 EPIC_Plate_4 EPIC_Plate_5 EPIC_Plate_6 EPIC_Plate_7 EPIC_Plate_8 EPIC_Plate_9 EPIC_Plate_10 EPIC_Plate_11 EPIC_Plate_12 EPIC_Plate_13 EPIC_Plate_14 EPIC_Plate_16\
+  --gsave --out data_refractor
+  
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile data_refractor.glint \
+  --epi --savepcs 10 \
+  --covar rc1 rc2 rc3 rc4 rc5 rc6 rc7 rc8 rc9 rc10 \
+  --gsave --out data_epi
+
+```
+
+```{r generate glint control file}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl/glint")
+library(tidyverse)
+library(data.table)
+
+epi = fread("data_epi.epistructure.pcs.txt",header=FALSE) %>%
+  as.data.frame() 
+colnames(epi) = c("ID","epi1","epi2","epi3","epi4","epi5","epi6","epi7","epi8","epi9","epi10")
+
+rfr = fread("data_refractor.refactor.components.txt") %>%
+  inner_join(epi,by="ID") %>%
+  dplyr::rename("beadPosition"="ID")
+
+
+write_rds(rfr,"/project/wiemels_494/sebastian/eyeDisease/methyl/glint.control.eye.rds")
+
+```
+
+# analysis
+
+```{r preparing a phenotype file}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+glint = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/glint.control.eye.rds")
+cellP = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye_disease_IDOL_DECON.rds")
+subs1 = fread("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.post.qc.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(-V1,-predictedSex,-Study,-Barcode_1,-Barcode_2,-Comment) %>%
+  dplyr::select(beadPosition, everything() ) %>%
+  inner_join(glint,by="beadPosition")%>%
+  inner_join(cellP,by="beadPosition")
+
+dups = subs1 %>% 
+  dplyr::filter(grepl("9999",setnumber)) %>%
+  distinct(setnumber, .keep_all=TRUE) %>%
+  dplyr::select(beadPosition)
+
+subs2 = subs1 %>% filter(!beadPosition%in%dups$beadPosition) 
+# 1452
+
+write_rds(subs2,"/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.rds")
+
+# update phenotype file with additional variables
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+
+b = read.csv("../codes/eye.add.csv") %>% distinct(ptid,.keep_all=TRUE)
+a = read_rds("../codes/sub.phenotypes.rds") %>%
+  left_join(b,by="ptid") 
+write_rds(a,"../codes/sub.phenotypes.clinical.rds")
+
+# adding smoking info into the phenotype file
+## _smokepreg: Smoked at any time during pregnancy: 0=no, 1=yes, .a='Don''t know' .b='Refused' .d='Question not asked because participant was not birthmother' .g='Entire section of questionnaire was not completed'
+## _smokepreg_months: number of months of mom smoking during preg
+## _smokepreg_monthsg3: number of months of mom smoking during preg: 0=no, 1=1-3, 2=4-6, 3=7+ months
+## _smokepreg_numcigs2: Average number of cigarettes smoked per day of smoking during pregnancy
+## _smokepreg_numcigsg4: number of mom cigs/day during preg:0=no, 1=<5, 2=5+
+## _smokepreg_tri3: Mom smoke preg: 0=no, 1=1st/2nd trimester only, 2=3rd trimester (maternal smoking during the 3rd trimester to be the most important predictor of hyperopia risk.)
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+eyesR = readxl::read_excel("../codes/eye_proj_smoking_7_21_2022.xls") %>%
+  dplyr::select(ptid_cdph, ptid,	`_smokepreg`,	`_smokepreg_tri3`, `_smokepreg_numcigs2`, 
+                `_smokepreg_numcigsg4`, `_smokepreg_months`, `_smokepreg_monthsg3`) %>%
+  dplyr::rename("smokepreg"="_smokepreg",
+                "smokepreg_tri3"="_smokepreg_tri3",
+                "smokepreg_numcigs2"="_smokepreg_numcigs2",
+                "smokepreg_numcigsg4"="_smokepreg_numcigsg4",
+                "smokepreg_months"="_smokepreg_months",
+                "smokepreg_monthsg3"="_smokepreg_monthsg3") %>%
+  as.data.frame() %>%
+  dplyr::distinct(ptid,.keep_all = TRUE)
+
+clinical = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>%
+  left_join(eyesR,by=c("ptid_cdph","ptid"))
+write_rds(clinical,"/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds")
+
+
+# adding severe hyperopia and astigmatism info into the phenotype file
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+eyesR = readxl::read_excel("../codes/Combined_array_data_9_12_2022.xls") %>%
+  as.data.frame() %>%
+  dplyr::select(ptid_cdph, ptid, hyperopia_b2, hyperopia_bg3, astigm2g_b2, astigm_bg3) %>%
+  dplyr::distinct(ptid,.keep_all = TRUE)
+
+clinical = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>%
+  left_join(eyesR,by=c("ptid_cdph","ptid"))
+write_rds(clinical,"/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds")
+
+```
+
+> > comparing the cell proportion differences between controls and
+> > different phenotypes
+
+```{r}
+
+library(broom)
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+subCP <- read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate))
+# 1452
+
+#which(subCP$beadPosition=='205624890179_R07C01')
+#which(subCP$beadPosition=='205657390060_R07C01')
+
+for(pheno in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_vision")){
+
+  #pheno="bi_decreased_vision"
+    
+  #subCP1 = subCP %>% filter(!is.na(.data[[pheno]])) 
+  
+  subCP1 = subCP %>% filter(.data[[pheno]]==1 | diseases==0) 
+
+  cellP <- data.frame()
+  j = 1
+  for(i in  c("CD8T","CD4T","NK","Bcell","Mono","Gran","nRBC")){
+    lm1 <- lm(subCP1[,i] ~ subCP1[,pheno] + subCP1$gender + subCP1$EPIC_Plate + subCP1$epi1 + 
+                subCP1$epi2 + subCP1$epi3 + subCP1$epi4 + subCP1$epi5 + subCP1$epi6+ 
+                subCP1$epi7+ subCP1$epi8+ subCP1$epi9+ subCP1$epi10)%>%
+      tidy() %>% as.data.frame()
+    cellP[j , 1] <- i
+    cellP[j , 2] <- lm1[2,2]
+    cellP[j , 3] <- lm1[2,3]
+    cellP[j , 4] <- lm1[2,4]
+    cellP[j , 5] <- lm1[2,5]
+    j = j+1
+   
+  }
+  
+  colnames(cellP) <- c("cell_name","estimate_10epi","stderror_10epi","stat_10epi","pvalue_10epi")
+  write.csv(cellP,paste0(pheno,"_lin_epi10.csv"))
+
+  }
+
+
+```
+
+> > valiadating 2 gestational age variables
+
+```{r}
+
+library(broom)
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+subCP <- read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  dplyr::select(gest_age_day,Gestation_length_CDPH) %>%
+  na.omit()
+
+plot(subCP$gest_age_day,subCP$Gestation_length_CDPH)
+
+```
+
+> > cell proportion differences between controls and different
+> > phenotypes, controlling for gestational age
+
+```{r}
+
+library(broom)
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+# using gest_age_week
+subCP <- read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(!is.na(gest_age_week)) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate))
+# 1452
+
+# using Gestation_length_CDPH
+subCP <- read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  mutate(gest_age_week=Gestation_length_CDPH/7)%>%
+  filter(!is.na(gest_age_week)) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate))
+# 1335
+
+#which(subCP$beadPosition=='205624890179_R07C01')
+#which(subCP$beadPosition=='205657390060_R07C01')
+
+for(pheno in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_vision")){
+
+  #pheno="bi_decreased_vision"
+    
+  subCP1 = subCP %>% filter(.data[[pheno]]==1 | diseases==0) 
+  
+  
+  cellP <- data.frame()
+  j = 1
+  for(i in  c("CD8T","CD4T","NK","Bcell","Mono","Gran","nRBC")){
+    lm1 <- lm(subCP1[,i] ~ subCP1[,pheno] + subCP1$gender + subCP1$EPIC_Plate + subCP1$epi1 + 
+                subCP1$epi2 + subCP1$epi3 + subCP1$epi4 + subCP1$epi5 + subCP1$epi6+ 
+                subCP1$epi7+ subCP1$epi8+ subCP1$epi9+ subCP1$epi10 + subCP1$gest_age_week)%>%
+      tidy() %>% as.data.frame()
+    cellP[j , 1] <- i
+    cellP[j , 2] <- lm1[2,2]
+    cellP[j , 3] <- lm1[2,3]
+    cellP[j , 4] <- lm1[2,4]
+    cellP[j , 5] <- lm1[2,5]
+    j = j+1
+   
+  }
+  
+  colnames(cellP) <- c("cell_name","estimate_10epi","stderror_10epi","stat_10epi","pvalue_10epi")
+  #write.csv(cellP,paste0(pheno,"_gest_lin_epi10.csv"))
+  write.csv(cellP,paste0(pheno,"_gest_lin_gestlength.csv"))
+  
+  }
+
+
+```
+
+Smoking score analysis
+
+```{r computing smoking score for all individuals}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+smscoreEPIC = c("cg02256631", 
+                "cg02482603", 
+                "cg04103532",
+                "cg04180046", 
+                "cg04506190", 
+                "cg05549655", 
+                "cg05575921",
+                "cg08698721", 
+                "cg09743950", 
+                "cg10799846", 
+                "cg12186702", 
+                "cg13834112", 
+                "cg13893782", 
+                "cg14179389", 
+                "cg14351425", 
+                "cg14633298", 
+                "cg14743346", 
+                "cg17397069", 
+                "cg19381766",
+                "cg22154659", 
+                "cg22802102", 
+                "cg23304605", 
+                "cg25189904",
+                "cg25949550", 
+                "cg26764244", 
+                "cg27291468")
+ 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.rds")
+
+methy1 = methyl %>% 
+  t %>%
+  as.data.frame() %>%
+  rownames_to_column(var="beadPosition") %>%
+  mutate(smokingScore = -0.191*cg02256631 + 2.706*cg02482603 + 1.786*cg04103532
+          + 14.027*cg04180046 + 2.318*cg04506190 + 6.210*cg05549655 -10.909*cg05575921
+          + 1.142*cg08698721 -6.330*cg09743950 -4.963*cg10799846 + 3.847*cg12186702 +
+          1.514*cg13834112 -0.963*cg13893782 -6.304*cg14179389 + 6.361*cg14351425 +
+          5.050*cg14633298 + 2.286*cg14743346 -2.912*cg17397069 + 5.245*cg19381766
+          -0.773*cg22154659 -0.254*cg22802102 + 0.011*cg23304605 -3.903*cg25189904
+          -46.991*cg25949550 -0.246*cg26764244 + 0.836*cg27291468)  %>%
+  select(beadPosition,smokingScore) 
+
+smokingScore = methy1 %>% na.omit()
+
+write.csv(smokingScore,"../eye.project.smoking.score.csv")
+
+```
+
+```{r checking smoking score correlations}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ggpubr)
+
+# smoking score for each individual and see correlation with phenotypes
+smkscr = read.csv("/project/wiemels_494/sebastian/eyeDisease/eye.project.smoking.score.csv", row.names = 1) 
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>%
+  inner_join(smkscr,by="beadPosition")
+
+for(varibl in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_vision")){
+
+  #varibl = "hyperopia_b"
+  
+  covs2 = covs1 %>%
+    filter(!is.na( .data[[varibl]]) )
+  covs2[,varibl] = as.factor(covs2[,varibl])
+  
+  ggplot(covs2, aes(x=.data[[varibl]], y=smokingScore, fill=.data[[varibl]])) +
+    geom_boxplot(outlier.size=0.2)+
+    stat_compare_means(label.y = max(covs2$smokingScore)*1.1) +
+    theme_classic() +
+    ggtitle(paste("Comparisons of smoking scores of ",varibl))+
+    xlab("Case/control status") +
+    ylab("Methylation smoking score") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_discrete(name="disease status",labels=c("0","1"))
+  ggsave(paste0(varibl,"_smoking_score_comp.png"), width = 8,height = 6)
+  
+}
+
+## stratified by race based on prototypes
+for(varibl in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_vision")){
+
+  for(race in c(1:4)){
+    
+  # varibl = "hyperopia_b"
+  # race = 1  
+  
+    covs2 = covs1 %>%
+      filter(!is.na( .data[[varibl]]) ) %>%
+      filter(raceg==race)
+    covs2[,varibl] = as.factor(covs2[,varibl])
+    
+    ggplot(covs2, aes(x=.data[[varibl]], y=smokingScore, fill=.data[[varibl]])) +
+      geom_boxplot(outlier.size=0.2)+
+      stat_compare_means(label.y = max(covs2$smokingScore)*1.1) +
+      theme_classic() +
+      ggtitle(paste("Comparisons of smoking scores of ",varibl,
+                    "\n race number:",race))+
+      xlab("Case/control status") +
+      ylab("Methylation smoking score") +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      scale_fill_discrete(name="disease status",labels=c("0","1"))
+    ggsave(paste0(varibl,"race_",race,"_smoking_score_comp.png"), width = 8,height = 6)
+    
+}}
+
+
+# chi-square test for the significant phenotype
+varibl = "astigm2g_b"
+
+covs3 = covs1 %>%
+  filter(!is.na( .data[[varibl]]) ) %>%
+  dplyr::select(smokingScore,.data[[varibl]])
+
+## dichotomize
+median = median(covs3$smokingScore)
+mean = mean(covs3$smokingScore)
+
+covs3 = covs3 %>%
+  mutate(higherThanMedian = as.numeric(smokingScore>median))%>%
+  mutate(higherThanMean = as.numeric(smokingScore>mean))
+
+chisq.test(covs3[varibl], covs3$higherThanMedian,correct=FALSE)
+chisq.test(covs3[varibl], covs3$higherThanMean,correct=FALSE)
+
+## 3 quartiles
+qs = quantile(covs3$smokingScore,probs = seq(0, 1, 0.33))
+
+covs3 = covs3 %>%
+  mutate(qt = ifelse(smokingScore<qs[2],1,
+                     ifelse(smokingScore<qs[3],2,3)))
+
+chisq.test(covs3[varibl], covs3$qt,correct=FALSE)
+
+# controlling for variables to compare smoking score
+
+covs_mult = covs1 %>%
+  filter(!is.na( .data[[varibl]]) ) %>%
+  mutate(raceg = as.factor(raceg),
+         gender = as.factor(gender)) %>%
+  dplyr::select(.data[[varibl]],
+                smokingScore, raceg, gender, rc1, rc2, rc3, 
+                gest_age_week, BIRTH_WEIGHT_CDPH)
+
+a =paste0(varibl," ~")
+b = paste(colnames(covs_mult)[-1],collapse=" + ")
+functionFormula = paste(a,b)
+
+glm(functionFormula,data=covs_mult,family = "binomial") %>%
+  summary()
+
+glm(astigm2g_b ~ smokingScore + raceg + gender,
+    data=covs_mult,family = "binomial") %>%
+  summary()
+
+################################################################
+# race-specific correlation with self-reported
+
+## smokepreg
+smkscr = read.csv("/project/wiemels_494/sebastian/eyeDisease/eye.project.smoking.score.csv", row.names = 1) 
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>%
+  inner_join(smkscr,by="beadPosition")
+
+covs1 %>%
+  filter(smokepreg %in% c(0,1)) %>%
+  mutate(smokepreg = as.factor(smokepreg)) %>%
+  dplyr::select(smokepreg,smokingScore) %>%
+  ggplot(aes(x=smokepreg, y=smokingScore, fill=as.factor(smokepreg))) +
+  geom_boxplot(outlier.size=0.2)+
+  stat_compare_means(method="t.test")+   
+  theme_classic() +
+  xlab("Smoked at any time during pregnancy") +
+  ylab("Methylation Smoking Score") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="smoking status",labels=c("0","1"))
+ggsave("overallAssoSCAndSelf.png",width = 8,height = 6)
+
+
+covs1 %>%
+  filter(smokepreg %in% c(0,1),
+         raceg %in% c(1,3)) %>%
+  mutate(smokepreg = as.factor(smokepreg),
+         raceg = as.factor(raceg)) %>%
+  dplyr::select(smokepreg,smokingScore,raceg) %>%
+  ggplot(aes(x=smokepreg, y=smokingScore, fill=as.factor(smokepreg))) +
+  geom_boxplot(outlier.size=0.2)+
+  stat_compare_means(method="t.test")+   
+  facet_wrap(~raceg, ncol=2)+
+  theme_classic() +
+  xlab("Smoked at any time during pregnancy") +
+  ylab("Methylation Smoking Score") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="smoking status",labels=c("0","1"))
+ggsave("byRaceAssoSCAndSelf.png",width = 8,height = 6)
+
+## smokepreg_tri3
+
+my_comparisons <- list( c("0", "1"), c("1", "2"),c("0","2"))
+
+covs1 %>%
+  filter(smokepreg_tri3 %in% c(0,1,2)) %>%
+  mutate(smokepreg_tri3 = as.factor(smokepreg_tri3)) %>%
+  dplyr::select(smokepreg_tri3,smokingScore) %>%
+  ggplot(aes(x=smokepreg_tri3, y=smokingScore, fill=as.factor(smokepreg_tri3))) +
+  geom_boxplot(outlier.size=0.2)+
+  stat_compare_means(comparisons = my_comparisons,method="t.test")+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 15,method = "anova")+ # add multiple group overall p value
+  theme_classic() +
+  xlab("Maternal smoking by trimester") +
+  ylab("Methylation Smoking Score") +
+  scale_fill_discrete(name="smoking status",labels=c("No","1st/2nd trimester only","3rd trimester"))
+ggsave("overallAssoSCAndSelfTrimester.png",width = 8,height = 6)
+
+# chi-square test 
+
+## for self-reported yes/no
+
+varibl = "smokepreg"
+
+covs3 = covs1 %>%
+  filter(smokepreg %in% c(0,1)) %>%
+  mutate(smokepreg = as.factor(smokepreg)) %>%
+  dplyr::select(smokepreg,smokingScore) 
+
+median = median(covs3$smokingScore)
+mean = mean(covs3$smokingScore)
+
+covs3 = covs3 %>%
+  mutate(higherThanMedian = as.numeric(smokingScore>median))%>%
+  mutate(higherThanMean = as.numeric(smokingScore>mean))
+
+chisq.test(covs3[varibl], covs3$higherThanMedian,correct=FALSE)
+chisq.test(covs3[varibl], covs3$higherThanMean,correct=FALSE)
+
+## for self-reported by trimester results
+varibl = "smokepreg_tri3"
+
+covs4 = covs1 %>%
+  filter(smokepreg_tri3 %in% c(0,1,2)) %>%
+  mutate(smokepreg_tri3 = as.factor(smokepreg_tri3)) %>%
+  dplyr::select(smokepreg_tri3,smokingScore)
+
+median = median(covs4$smokingScore)
+mean = mean(covs4$smokingScore)
+
+covs4 = covs4 %>%
+  mutate(higherThanMedian = as.numeric(smokingScore>median))%>%
+  mutate(higherThanMean = as.numeric(smokingScore>mean))
+
+chisq.test(covs4[varibl], covs4$higherThanMedian,correct=FALSE)
+chisq.test(covs4[varibl], covs4$higherThanMean,correct=FALSE)
+
+```
+
+Epigenetic aging analysis for cases and controls
+
+```{r computing epigenetic aging scores for subjects}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+clinical = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") 
+
+##################################################################
+# DNAmTL
+
+DNAmTL = function(tobeCalculated,database){
+  
+
+  tobeCalculated[nrow(tobeCalculated)+1,] = rep(1,ncol(tobeCalculated))
+  rownames(tobeCalculated)[nrow(tobeCalculated)] = 'Intercept'
+  
+  if(sum(is.element(database$Variable,rownames(tobeCalculated)))==nrow(database)){
+    tobeCalculated = tobeCalculated[database$Variable,]
+    print("preparation success.")
+  }else{
+    print("number of variables not sufficient for TL calculations.")
+  }
+  
+  funcX = function(x){
+    return(sum(x*database$Coefficient))
+  }
+    
+  dnaM = data.frame(
+    DNAmTL = apply(tobeCalculated,2,funcX) 
+  ) %>%
+    rownames_to_column(var="beadPosition")
+
+  return(dnaM)
+}
+
+tlCal = read.csv("/project/wiemels_494/sebastian/DNAmTL/codes/DNAmTL.csv")  
+
+included = intersect(rownames(methyl),tlCal$Variable)
+methyl0 = methyl[included,] %>% as.data.frame()
+database = tlCal %>%
+  as.data.frame() %>%
+  column_to_rownames(var="Variable")
+database = database[c(included,"Intercept"),,drop=FALSE]
+database = database %>%
+  rownames_to_column(var="Variable")
+
+methylTL = DNAmTL(methyl0,database) 
+  
+tlwClinical = inner_join(clinical,methylTL,by="beadPosition") 
+
+##################################################################
+#  DNAmAge - pantissue clock
+
+datClock <- fread("../codes/13059_2013_3156_MOESM23_ESM.csv")
+datClock_all_probe <- data.frame(probeId = datClock %>% pull(CpGmarker) %>% .[-1])
+
+nrow(datClock_all_probe) # 353
+
+length(intersect(rownames(methyl),datClock$CpGmarker)) # 322 out of 353 probes that are needed
+
+# add those missing CpGs and gave them values NA 
+#setdiff(datClock_all_probe$probeId,rownames(methyl))
+dat1 <- datClock_all_probe %>% left_join(methyl %>% 
+                                           as.data.frame() %>% 
+                                           rownames_to_column(var="probeId"), 
+                                         by = "probeId")
+
+#STEP 1: DEFINE QUALITY METRICS
+#meanMethBySample =as.numeric(apply(as.matrix(dat1[,-1]),2,mean,na.rm=F))
+#minMethBySample   =as.numeric(apply(as.matrix(dat1[,-1]),2,min,na.rm=F))
+#maxMethBySample  =as.numeric(apply(as.matrix(dat1[,-1]),2,max,na.rm=F))
+datMethUsed = t(dat1[,-1])  
+colnames(datMethUsed) = dat1 %>% pull(probeId)
+noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
+table(noMissingPerSample) # no missing probe was found for 334 out of 353 probes
+#STEP 2: Imputing 
+library(impute)
+fastImputation=FALSE
+nSamples = 1458
+if (! fastImputation & nSamples>1 & max(noMissingPerSample,na.rm=TRUE)<3000 ){
+  # run the following code if there is at least one missing
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 ){
+    dimnames1 = dimnames(datMethUsed)
+    datMethUsed = data.frame(t(impute.knn(t(datMethUsed))$data))
+    dimnames(datMethUsed)=dimnames1
+  } # end of if
+} # end of if (! fastImputation )
+
+if ( max(noMissingPerSample,na.rm=TRUE)>=3000 ) fastImputation=TRUE
+
+if ( fastImputation | nSamples==1 ){
+  noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
+  table(noMissingPerSample)
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 & max(noMissingPerSample,na.rm=TRUE) >= 3000 ) {normalizeData=FALSE}
+  
+  # run the following code if there is at least one missing
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 & max(noMissingPerSample,na.rm=TRUE) < 3000 ){
+    dimnames1=dimnames(datMethUsed)
+    for (i in which(noMissingPerSample>0) ){
+      selectMissing1=is.na(datMethUsed[i,])
+      datMethUsed[i,selectMissing1] = as.numeric(probeAnnotation21kdatMethUsed$goldstandard2[selectMissing1])
+    } # end of for loop
+    dimnames(datMethUsed)=dimnames1
+  } # end of if
+} # end of if (! fastImputation )
+
+datMethUsed %>% dim()
+# [1] 1458  353
+
+# convert datMethUsed to dat1
+dat1_remake <- t(datMethUsed)
+colnames(dat1_remake) = rownames(datMethUsed)
+dat1_remake_probeId <- rownames(dat1_remake)
+dat1_remake <- dat1_remake %>% data.table() 
+dat1_remake$probeId <- dat1_remake_probeId
+dat1 <- dat1_remake %>% relocate(probeId)
+
+# STEP 3: Data normalization (each sample requires about 8 seconds). It would be straightforward to parallelize this operation. ---- SKIP 
+
+#STEP 4: Predict age and create a data frame for the output (referred to as datout)
+# check order
+selectCpGsClock = is.element(dat1$probeId, datClock[-1,1] %>% pull(CpGmarker))  
+datMethClock0 = data.frame(t(dat1[selectCpGsClock, -1]))  
+colnames(datMethClock0) = dat1[selectCpGsClock ,]$probeId
+
+# Reality check: the following output should only contain numeric values.
+# Further, the column names should be CpG identifiers (cg numbers).
+datMethClock0[1:5,1:5]
+datMethClock = data.frame(datMethClock0[datClock[-1,1] %>% pull(CpGmarker)])
+
+# The number of rows should equal the number of samples (Illumina arrays)
+dim(datMethClock) 
+
+#Output DNAm age estimator for the DNAmAge
+adult.age1=20
+trafo = function(x,adult.age=adult.age1) {x=(x+1)/(1+adult.age); y=ifelse(x<=1, log(x),x-1); y}
+anti.trafo =function(x,adult.age=adult.age1) {ifelse(x<0,(1+adult.age)*exp(x)-1,(1+adult.age)*x+adult.age)}
+DNAmAge = as.numeric(anti.trafo(datClock$CoefficientTraining[1] + as.matrix(datMethClock)%*%as.numeric(datClock$CoefficientTraining[-1])))
+
+df_DNAmAge <- data.frame(beadPosition = rownames(datMethClock), DNAmAge)
+
+##################################################################
+# GA Haftorn clock 
+
+datClock <- fread("../codes/Haftorn.probes.coef.additional.file6.cleaned.txt") 
+colnames(datClock)[2] = "cpgs"
+
+allCpGs = intersect(datClock$cpgs,rownames(methyl))
+datClock = datClock %>%
+  filter(cpgs %in% c("(Intercept)",allCpGs))
+  
+# sort dat0 to have the same order with datClock
+dat0 <- data.frame(probeId =datClock$cpgs[-1]) %>% left_join(methyl %>% 
+                                                                       as.data.frame() %>% 
+                                                                       rownames_to_column(var="probeId")
+                                                             , by = "probeId")
+# check order
+selectCpGsClock=is.element(dat0[,1], as.character(datClock[-1,2]%>% pull()))  
+datMethClock0=data.frame(t(dat0[selectCpGsClock, -1]))  
+colnames(datMethClock0)=as.character(dat0[selectCpGsClock ,1])
+
+# Reality check: the following output should only contain numeric values.
+# Further, the column names should be CpG identifiers (cg numbers).
+datMethClock0[1:5,1:5]
+datMethClock= data.frame(datMethClock0[as.character(datClock[-1,2]%>% pull())])
+
+#Output DNAm age estimator
+Haftorn_clock=as.numeric(datClock$coef[1] + as.matrix(datMethClock)%*%as.numeric(datClock$coef[-1]))
+x <- datClock$coef[1] + as.matrix(datMethClock)%*%as.numeric(datClock$coef[-1])
+df_Haftorn_clock <- data.frame(beadPosition = rownames(x), Haftorn_clock)
+
+##################################################################
+# GA Knight clock
+
+datClock <- fread("../codes/knight_probes.csv")
+datClock_all_probe <- data.frame(probeId = datClock %>% pull(CpGmarker) %>% .[-1])
+dat1 <- datClock_all_probe %>% left_join(methyl %>% 
+                                           as.data.frame() %>%
+                                           rownames_to_column(var="probeId"), by = "probeId")
+
+#STEP 1: DEFINE QUALITY METRICS
+datMethUsed = t(dat1[,-1])  
+colnames(datMethUsed) = dat1 %>% pull(probeId)
+noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
+table(noMissingPerSample) # 7 missing probes
+
+#STEP 2: Imputing 
+library(impute)
+fastImputation=FALSE
+nSamples = 1458
+if (! fastImputation & nSamples>1 & max(noMissingPerSample,na.rm=TRUE)<3000 ){
+  # run the following code if there is at least one missing
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 ){
+    dimnames1 = dimnames(datMethUsed)
+    datMethUsed = data.frame(t(impute.knn(t(datMethUsed))$data))
+    dimnames(datMethUsed)=dimnames1
+  } # end of if
+} # end of if (! fastImputation )
+
+if ( max(noMissingPerSample,na.rm=TRUE)>=3000 ) fastImputation=TRUE
+
+if ( fastImputation | nSamples==1 ){
+  noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
+  table(noMissingPerSample)
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 & max(noMissingPerSample,na.rm=TRUE) >= 3000 ) {normalizeData=FALSE}
+  
+  # run the following code if there is at least one missing
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 & max(noMissingPerSample,na.rm=TRUE) < 3000 ){
+    dimnames1=dimnames(datMethUsed)
+    for (i in which(noMissingPerSample>0) ){
+      selectMissing1=is.na(datMethUsed[i,])
+      datMethUsed[i,selectMissing1] = as.numeric(probeAnnotation21kdatMethUsed$goldstandard2[selectMissing1])
+    } # end of for loop
+    dimnames(datMethUsed)=dimnames1
+  } # end of if
+} # end of if (! fastImputation )
+
+datMethUsed %>% dim()
+
+# convert datMethUsed to dat1
+dat1_remake <- t(datMethUsed)
+colnames(dat1_remake) = rownames(datMethUsed)
+dat1_remake_probeId <- rownames(dat1_remake)
+dat1_remake <- dat1_remake %>% data.table() 
+dat1_remake$probeId <- dat1_remake_probeId
+dat1 <- dat1_remake %>% relocate(probeId)
+
+# STEP 3: Data normalization (each sample requires about 8 seconds). It would be straightforward to parallelize this operation. ---- SKIP 
+#STEP 4: Predict age and create a data frame for the output (referred to as datout)
+# sort dat1 to have the same order with datClock
+dat1 <- data.frame(probeId = datClock[-1,1] %>% pull(CpGmarker)) %>% left_join(dat1, by = "probeId")
+# check order
+selectCpGsClock = is.element(dat1[,1], datClock[-1,1] %>% pull(CpGmarker))  
+datMethClock0 = data.frame(t(dat1[selectCpGsClock, -1]))  
+colnames(datMethClock0) = as.character(dat1[selectCpGsClock ,1])
+# Reality check: the following output should only contain numeric values.
+# Further, the column names should be CpG identifiers (cg numbers).
+datMethClock0[1:5,1:5]
+datMethClock = data.frame(datMethClock0[datClock[-1,1] %>% pull(CpGmarker)])
+#Output DNAm age estimator for the DNAmAge
+Knight_clock_week = as.numeric(datClock$CoefficientTraining[1] + as.matrix(datMethClock)%*%as.numeric(datClock$CoefficientTraining[-1]))
+Knight_clock <- 7*Knight_clock_week
+x <- as.matrix(datMethClock)%*%as.numeric(datClock$CoefficientTraining[-1])
+df_Knight_clock <- data.frame(beadPosition = rownames(x), Knight_clock)
+
+##################################################################
+# GA Bohlin clock 
+
+library(predictGA)
+datClock_all_probe <- data.frame(probeId = extractSites(type="se"))
+dat1 <- datClock_all_probe %>% left_join(methyl %>% 
+                                           as.data.frame() %>%
+                                           rownames_to_column(var="probeId"), 
+                                         by = "probeId")
+dim(dat1)
+
+#STEP 1: DEFINE QUALITY METRICS
+datMethUsed = t(dat1[,-1])  
+colnames(datMethUsed) = dat1 %>% pull(probeId)
+noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
+table(noMissingPerSample) # 14 missing probes
+
+#STEP 2: Imputing 
+library(impute)
+fastImputation=FALSE
+nSamples = 1458
+if (! fastImputation & nSamples>1 & max(noMissingPerSample,na.rm=TRUE)<3000 ){
+  # run the following code if there is at least one missing
+  if ( max(noMissingPerSample,na.rm=TRUE)>0 ){
+    dimnames1 = dimnames(datMethUsed)
+    datMethUsed = data.frame(t(impute.knn(t(datMethUsed))$data))
+    dimnames(datMethUsed)=dimnames1
+  } # end of if
+} # end of if (! fastImputation)
+
+#STEP 3: Predict age and create a data frame for the output (referred to as datout)
+mypred <- predictGA(datMethUsed, transp=F)
+df_Bohlin_clock <- data.frame(beadPosition = rownames(mypred), Bohlin_clock = mypred %>% pull(GA))
+
+
+##################################################################
+final_all_clocks = tlwClinical %>% # DNAmTL
+  left_join(df_DNAmAge,by="beadPosition") %>% # DNAmAge
+  left_join(df_Haftorn_clock,by="beadPosition") %>% # Haftorn_clock
+  left_join(df_Knight_clock,by="beadPosition") %>% # Knight_clock
+  left_join(df_Bohlin_clock,by="beadPosition") # Bohlin_clock
+
+write.csv(final_all_clocks,"telomere_dnam_set.eye.csv")
+  
+# compare different prototypes
+# hyperopia_b,astigm2g_b,esotropia,exotropia,bi_decreased_vision, hyperopia_b2, hyperopia_bg3, astigm2g_b, astigm2g_b2,astigm_bg3
+
+for(var in c("hyperopia_b","esotropia","exotropia","bi_decreased_vision","hyperopia_b2","astigm2g_b","astigm2g_b2")){
+  for(clock in c("DNAmTL","DNAmAge","Haftorn_clock","Knight_clock","Bohlin_clock")){
+
+  final_all_clocks %>% 
+    mutate(phenotype = .data[[var]]) %>%
+    mutate(clock = .data[[clock]] ) %>%
+    mutate(phenotype = as.factor(phenotype)) %>%
+    filter(phenotype ==1 | diseases==0) %>%
+    dplyr::select(phenotype,clock) %>%
+    na.omit() %>%
+    ggplot(aes(x=phenotype, y=clock,fill=phenotype)) +
+    geom_boxplot(outlier.size=0.2)+
+    theme_bw() +
+    xlab(var) +
+    ylab(clock) +
+    theme(plot.title = element_text(hjust = 0.5)) 
+  ggsave(paste0("telomere_comp_",var,".",clock,".png"),width = 8,height = 6)
+}}
+
+for(var in c("hyperopia_bg3","astigm_bg3")){
+  for(clock in c("DNAmTL","DNAmAge","Haftorn_clock","Knight_clock","Bohlin_clock")){
+
+  final_all_clocks %>% 
+    mutate(phenotype = .data[[var]]) %>%
+    mutate(clock = .data[[clock]] ) %>%
+    mutate(phenotype = as.factor(phenotype)) %>%
+    filter(phenotype == c(1,2) | diseases==0) %>%
+    dplyr::select(phenotype,clock) %>%
+    na.omit() %>%
+    ggplot(aes(x=phenotype, y=clock,fill=phenotype)) +
+    geom_boxplot(outlier.size=0.2)+
+    theme_bw() +
+    xlab(var) +
+    ylab(clock) +
+    theme(plot.title = element_text(hjust = 0.5)) 
+  ggsave(paste0("telomere_comp_",var,".",clock,".png"),width = 8,height = 6)
+  
+}}
+  
+```
+
+########################
+EWAS models (1)
+
+```{r Hyperopia, all races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+# #linear <- function(meth,cov){
+#   methDF = meth %>% as.numeric()
+#   dat <- data.frame(y = methDF, cov)
+#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+#   mod <- try(lm(ff, data = dat),silent = TRUE)
+#   N <- sum(!is.na(dat[,1]))
+#   if (class(mod)=="lm") {
+#     coefs = summary(mod)$coefficients
+#     coef = coefs[2,"Estimate"]
+#     SE = coefs[2,"Std. Error"]
+#     t.value = coefs[2,"t value"]
+#     p.value = coefs[2,"Pr(>|t|)"]
+#     out = c(coef, SE, t.value, p.value, N) 
+#   } else {
+#     out = c(rep(NA,4), N)
+#   }
+#   names(out) = c("Beta","SE", "t", "P", "N")
+#   return(out) 
+# }
+
+varName="hyperopia_b"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.lm.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="hyperopia_b"
+
+results <- fread(paste0(varName,".ewas.lm.txt")) %>% #717427
+  dplyr::filter(grepl('cg', cpg)) %>% # 715722
+  filter(!is.na(P))%>%
+  left_join(annoEPIC,by="cpg") %>%
+  arrange(by=P) %>% 
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) #641654
+
+Nbeta <- sum(!is.na(results$P))
+tmp <- results[!is.na(results$P),]
+lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+print(round(lambda, 2))
+
+#[1] 0.88
+
+results <- results %>%
+  mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+  mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+
+write.table(results,paste0(varName,".ewas.annotated.lm.txt"),
+            quote=FALSE,
+            row.names = FALSE,
+            sep = '\t')
+
+results[1,]
+#           cpg     Beta        SE        Z            P ncase ncontrol  chr
+# 1: cg15808331 4.245565 0.9250213 4.589695 4.438947e-06   496      761 chr3
+#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 45142585            OpenSea             CDCP1        NA               Body
+#    CpG_maf Regulatory_Feature_Group       fdr bf
+# 1:      NA                          0.9999855  1
+
+####################################
+# figures (qq plot and manhattan)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(CMplot)
+library(QCEWAS)
+library(qqman)
+
+varName="hyperopia_b"
+
+model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  arrange(log(fdr))%>%
+  dplyr::mutate(cpg_name=cpg,estimate=Beta, std_error=SE,p_val=P)
+
+annotation = model_anno%>%
+  filter(fdr<0.5)%>%
+  filter(UCSC_RefGene_Name!="") %>%
+  mutate(gene.highlight = sub(";.*$","",UCSC_RefGene_Name))
+cpg.highlight = annotation$cpg_name
+genes.highlight = annotation$gene.highlight
+
+outcomes_model_CM_plot <- model_anno%>%
+  dplyr::mutate(p_val_cmplot = -log10(p_val))%>%
+  dplyr::mutate(p_val_cmplot= ifelse(estimate<0,-p_val_cmplot, p_val_cmplot )) %>%
+  dplyr::select(cpg_name, chr,pos, p_val_cmplot)
+outcomes_model_CM_plot$chr <- gsub("chr","",outcomes_model_CM_plot$chr)
+
+CMplot(outcomes_model_CM_plot,
+       plot.type="m",
+       band=0, 
+       cex=c(0.5,0.5,0.5),
+       amplify=FALSE,
+       LOG10=FALSE,  
+       signal.col=NULL,
+       chr.den.col=NULL,
+       # threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
+       # threshold.lty=2, 
+       # threshold.lwd=1, 
+       # threshold.col="black", 
+       highlight=cpg.highlight,
+       highlight.text=genes.highlight, 
+       file="jpg",
+       memo=paste0(varName,".ewas.annotated.manhattan"),
+       dpi=500,file.output=TRUE,verbose=TRUE)
+
+outcomes_model_qq <- model_anno %>% 
+  dplyr::select(cpg_name,p_val)%>%
+  dplyr::mutate(ID=cpg_name, P=p_val)
+lambda <- P_lambda(outcomes_model_qq$P)
+
+tiff(paste0(varName,".ewas.qq.tiff"), width = 10, height = 7, units = 'in', res = 300)
+qq(outcomes_model_qq$P)
+dev.off()
+
+####################################
+# pathway analysis 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+varName="hyperopia_b"
+
+model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  as.data.frame() %>%
+  arrange(P)
+
+raw_100 = model_anno %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+raw_100 = raw_100[1:100,]
+
+raw_100_vec = as.numeric(raw_100$p_val)
+names(raw_100_vec) = raw_100$cpg_name
+
+res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+#write_rds(res1,"res1.rds")
+#res1 = read_rds("res1.rds")
+res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+
+res1$term = "KEGG"
+res2$term = "GO"
+res_total = rbind(res1%>%filter(pvalue<0.05),
+                  res2%>%filter(pvalue<0.05)) %>%
+  as.data.frame()
+  
+write.csv(res_total,paste0(varName,"_pathways_top_100.csv"))
+  
+####################################
+# DMR analysis (in R 4.0.0)
+# module load gcc/8.3.0  
+# module load openblas/0.3.8
+# module load r/4.0.0
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+varName="hyperopia_b"
+
+raw = fread(paste0(varName,".ewas.annotated.lm.txt")) 
+raw1 = raw %>%
+  as.data.frame() %>%
+  dplyr::rename("probe"="cpg",
+                "p"="P") %>%
+  dplyr::select(probe,p) %>%
+  inner_join(annoEPIC,by="probe") %>%
+  mutate(chr=sub("chr","",chr))%>%
+  arrange(chr,start)%>%
+  na.omit()
+
+ipdmr(raw1,
+      include.all.sig.sites=FALSE,
+      region_plot=TRUE,
+      mht_plot=FALSE)
+
+if (file.exists("region_plot.pdf")) {
+ file.rename("region_plot.pdf", paste0(varName,"_region_plot.pdf"))
+} 
+
+if(file.exists("resu_ipdmr.csv")){
+
+  dmr = read.csv("resu_ipdmr.csv") %>%
+    filter(nprobe>1)
+  
+  comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field="end",
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  
+  if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+  try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+      silent=TRUE)
+  }
+  
+  comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+    mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+    dplyr::select(-strand)
+  
+  dmrs_1 = comb_p_GR_DF %>%  
+    dplyr::select(seqnames,start,end,dmr_id) %>%
+    as.data.frame()
+  
+  betasAll = raw %>%
+    filter(!is.na(P))%>%
+    dplyr::select(cpg,Beta) %>%
+    left_join(annoEPIC,by=c("cpg"="probe")) %>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("seqnames"),
+                         start.field="start",
+                         end.field=c("end"),
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+  Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+  
+  a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+    dplyr::select(dmr_id)
+  b=betasAll[queryHits(overlap_DMR_Res),] 
+  com = cbind(b,a) %>% 
+    as.data.frame() %>%
+    arrange(chr,start) %>%
+    group_by(dmr_id) %>%
+    summarise(mean_beta = mean(Beta))
+  
+  dmr_w_beta = comb_p_GR_DF %>%
+    left_join(com,by="dmr_id") %>%
+    dplyr::select(-dmr_id)
+  
+  write.csv(dmr_w_beta,paste0(varName,"_annotated_dmr.csv"))
+  
+  unlink("resu_ipdmr.csv") # delete this file
+
+}
+
+####################################
+###gene look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+lookup_source_1 = fread("lookup/CREAM.txt",header=FALSE) %>%
+  as.data.frame() %>%
+  distinct(V1,.keep_all=TRUE)
+colnames(lookup_source_1)="Nearest gene"
+lookup_source_1$source="cream"
+
+lookup_source_2 = fread("lookup/WeiJieSeowetal.csv",header=TRUE) %>%
+  as.data.frame() %>%
+  filter(`Nearest gene`!="")
+lookup_source_2$source="weijie"
+
+gene_list = rbind(lookup_source_1,lookup_source_2[c("Nearest gene","source")]) %>% 
+  as.data.frame() %>%
+  dplyr::rename("gene"="Nearest gene")
+
+# write.csv(gene_list,"gene_list.csv")
+
+varName="hyperopia_b"
+results= fread(paste0(varName,".ewas.annotated.lm.txt"))
+sigones_results = results[1:100,] 
+
+genelookup_results = results %>%
+  mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+  filter(gene %in% gene_list$gene) %>%
+  arrange(as.numeric(P)) %>%
+  dplyr::select(-gene)
+
+lookuptotal = rbind(sigones_results,genelookup_results) %>%
+  as.data.frame() 
+
+write.csv(lookuptotal,paste0("lookup.",varName,".all.races.ewas.lm.csv"))
+
+####################################
+###CORSIV look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+cors = fread("/project/wiemels_260/sebastian/CORSIV/CoRSIVswAnnotation.txt") %>%
+  as.data.frame() %>%
+  dplyr::select(CG,cluster_id) 
+
+varName="hyperopia_b"
+results= fread(paste0(varName,".ewas.annotated.lm.txt")) 
+results_top = results[1:100,] %>%
+  rownames_to_column(var="rank") %>%
+  dplyr::select(rank,cpg,Beta,UCSC_RefGene_Name,P,fdr) %>%
+  left_join(cors,by=c("cpg"="CG")) %>%
+  na.omit()
+if(nrow(results_top)>0){
+  write.csv(results_top,paste0(varName,".corsvi.lookup.all.races.csv"))}
+
+```
+
+```{r severe hyperopias, all races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+linear <- function(meth, var, cov){
+  
+  dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+    filter(is.finite(meth))
+  ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  mod <- try(lm(ff, data = dat),silent=TRUE)
+  N <- sum(!is.na(dat[,1]))
+  if (class(mod)=="lm") {
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    t.value = coefs[2,"t value"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, t.value, p.value, N)
+  } else {
+    out = c(rep(NA,4), N)
+  }
+  names(out) = c("Beta","SE", "t", "P", "N")
+  return(out)
+}
+
+############################################################
+
+varName="hyperopia_b2"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.logistic.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+############################################################
+
+varName="hyperopia_bg3"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]] %in% c(1,2) | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,linear,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, linear, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.linear.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+############################################################
+# hyperopia_bg3 case only
+
+varName="hyperopia_bg3"
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() 
+
+covs1[varName]=covs1[varName]-1
+table(covs1[varName])
+
+covs1 = covs1 %>%
+  filter(.data[[varName]] %in% c(0,1)) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,"case.only.ewas.logistic.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
+  
+   #varName="hyperopia_bg3.case.only"
+  
+  if(varName=="hyperopia_b2") filename=paste0(varName,".ewas.logistic.txt")
+  if(varName=="hyperopia_bg3") filename=paste0(varName,".ewas.linear.txt")
+  if(varName=="hyperopia_bg3.case.only") filename=paste0(varName,".ewas.logistic.txt")
+  
+  print(varName)
+  
+  results <- fread(filename) %>% #717427
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) #641654
+  
+  Nbeta <- sum(!is.na(results$P))
+  tmp <- results[!is.na(results$P),]
+  lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  
+  print(round(lambda, 2))
+  
+  results <- results %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+  
+  write.table(results,paste0(varName,".ewas.annotated.lm.txt"),
+              quote=FALSE,
+              row.names = FALSE,
+              sep = '\t')
+  
+  print(results[1,])
+  
+}
+
+# [1] "hyperopia_b2"
+# [1] 0.84
+#           cpg    Beta      SE        Z            P ncase ncontrol   chr
+# 1: cg02286589 22.6601 5.15933 4.392062 1.122806e-05   109      761 chr16
+#        pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 1556286            S_Shore             TELO2        NA               Body
+#    CpG_maf Regulatory_Feature_Group       fdr bf
+# 1:      NA                          0.9999915  1
+
+# [1] "hyperopia_bg3"
+# [1] 0.81
+#          cpg      Beta        SE        t            P    N  chr       pos
+# 1: cg17122694 -3.721569 0.7088069 -5.25047 1.787799e-07 1257 chr1 222801447
+#    Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group CpG_maf
+# 1:            OpenSea              MIA3        NA               Body      NA
+#    Regulatory_Feature_Group       fdr        bf
+# 1:                          0.1147149 0.1147149
+
+# [1] "hyperopia_bg3.case.only"
+# [1] 1.11
+#           cpg      Beta       SE         Z           P ncase ncontrol  chr
+# 1: cg21699194 -68.68683 14.14484 -4.855963 1.19803e-06   109      387 chr2
+#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 67791398            OpenSea                    0.015096                   
+#    CpG_maf Regulatory_Feature_Group       fdr        bf
+# 1:      NA                          0.7687207 0.7687207
+
+####################################
+# pathway analysis 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
+
+  model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+      as.data.frame() %>%
+      arrange(P)
+    
+  raw_100 = model_anno %>%
+      mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+      dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+  raw_100 = raw_100[1:100,]
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  #write_rds(res1,"res1.rds")
+  #res1 = read_rds("res1.rds")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(varName,"_pathways_top_100.csv"))
+}
+
+####################################
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
+
+  raw = fread(paste0(varName,".ewas.annotated.lm.txt")) 
+  raw1 = raw %>%
+    as.data.frame() %>%
+    dplyr::rename("probe"="cpg",
+                  "p"="P") %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+  
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(varName,"_region_plot.pdf"))
+  } 
+  
+  if(file.exists("resu_ipdmr.csv")){
+  
+    dmr = read.csv("resu_ipdmr.csv") %>%
+      filter(nprobe>1)
+    
+    unlink("resu_ipdmr.csv") # delete this file
+
+    comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field="end",
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    
+    if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+    try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+        silent=TRUE)
+    }
+    
+    if(exists("comb_p_GR_DF")){
+
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+    
+    betasAll = raw %>%
+      filter(!is.na(P))%>%
+      dplyr::select(cpg,Beta) %>%
+      left_join(annoEPIC,by=c("cpg"="probe")) %>%
+      arrange(chr,start)%>%
+      na.omit()
+    
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Beta))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    write.csv(dmr_w_beta,paste0(varName,"_annotated_dmr.csv"))
+    rm(comb_p_GR_DF)
+  }}
+}
+
+####################################
+###gene look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+lookup_source_1 = fread("lookup/CREAM.txt",header=FALSE) %>%
+  as.data.frame() %>%
+  distinct(V1,.keep_all=TRUE)
+colnames(lookup_source_1)="Nearest gene"
+lookup_source_1$source="cream"
+
+lookup_source_2 = fread("lookup/WeiJieSeowetal.csv",header=TRUE) %>%
+  as.data.frame() %>%
+  filter(`Nearest gene`!="")
+lookup_source_2$source="weijie"
+
+gene_list = rbind(lookup_source_1,lookup_source_2[c("Nearest gene","source")]) %>% 
+  as.data.frame() %>%
+  dplyr::rename("gene"="Nearest gene")
+
+# write.csv(gene_list,"gene_list.csv")
+
+for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
+  
+  results= fread(paste0(varName,".ewas.annotated.lm.txt"))
+  sigones_results = results[1:100,] 
+  
+  genelookup_results = results %>%
+    mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+    filter(gene %in% gene_list$gene) %>%
+    arrange(as.numeric(P)) %>%
+    dplyr::select(-gene)
+  
+  lookuptotal = rbind(sigones_results,genelookup_results) %>%
+    as.data.frame() 
+  
+  write.csv(lookuptotal,paste0("lookup.",varName,".all.races.ewas.lm.csv"))
+  
+}
+
+
+```
+
+```{r severe hyperopias, lasso regression model}
+
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+varName="hyperopia_b2"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+################################################################
+# split into 70% training and 30% testing
+set.seed(0528)
+controls = which(covs1[varName]==0)
+cases = which(covs1[varName]==1)
+training = c(sample(controls,0.7*length(controls)), sample(cases,0.7*length(cases)))
+testing = setdiff(c(cases,controls),training)
+
+training.cov = covs1[training,]
+training.meth = methyl1[,training]
+
+testing.cov = covs1[testing,]
+testing.meth = methyl1[,testing]
+
+write_rds(training.cov,"lasso/training.cov.rds")
+write_rds(training.meth,"lasso/training.meth.rds")
+write_rds(testing.cov,"lasso/testing.cov.rds")
+write_rds(testing.meth,"lasso/testing.meth.rds")
+
+################################################################
+# training set: EWAS, pick the top 200 CpGs
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl/lasso")
+varName="hyperopia_b2"
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+training.cov = read_rds("training.cov.rds")
+training.meth = read_rds("training.meth.rds")
+
+training.cov.uni = training.cov %>% dplyr::select(hyperopia_b2)
+
+# methylt = training.meth[1:300,] 
+# results = t(apply(methylt,1,logistic.fun,varName,training.cov.uni))
+
+results <- t(parApply(cl, training.meth, 1, logistic.fun, varName, training.cov.uni)) 
+results <- as.data.frame(results) %>%
+  na.omit() %>%
+  rownames_to_column(var="cpg")
+
+write_rds(results,paste0(varName,".training.lasso.logistic.rds"))
+
+################################################################
+# train a LASSO model with top CpGs
+library(tidyverse)
+library(data.table)
+library(parallel) 
+library(glmnet)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl/lasso")
+varName="hyperopia_b2"
+
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+topCpgsTraining = read_rds(paste0(varName,".training.lasso.logistic.rds")) %>%
+    as.data.frame() %>%
+    dplyr::filter(grepl('cg', cpg)) %>% 
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) 
+
+topCpgsTrainingSelected = topCpgsTraining[1:200,"cpg"]
+
+training.cov = read_rds("training.cov.rds") %>%
+  dplyr::select(one_of(varName),gender,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC)
+training.meth = read_rds("training.meth.rds")[topCpgsTrainingSelected,] %>% 
+  t %>%  as.data.frame()
+training.total = cbind(training.cov,training.meth) %>% as.data.frame()
+training.y = training.total[,1]
+training.x = training.total[,-1] %>% as.matrix()
+
+testing.cov = read_rds("testing.cov.rds")%>%
+  dplyr::select(one_of(varName),gender,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC)
+testing.meth = read_rds("testing.meth.rds")[topCpgsTrainingSelected,]%>% 
+  t %>%  as.data.frame()
+testing.total = cbind(testing.cov,testing.meth) %>% as.data.frame()
+testing.y = testing.total[,1]
+testing.x = testing.total[,-1] %>% as.matrix()
+
+#perform k-fold cross-validation to find optimal lambda value
+frac0 = table(training.y)[1]/length(training.y)
+frac1 = table(training.y)[2]/length(training.y)
+weights = ifelse( training.y==0, frac1, frac0 )
+
+cv_model <- cv.glmnet(training.x, training.y, weights=weights,alpha = 1)
+best_lambda <- cv_model$lambda.min
+
+#png("cv_model_tuning.png")
+#plot(cv_model) 
+#dev.off()
+
+lasso_model <- glmnet(training.x, training.y, alpha = 1, weights=weights, lambda = best_lambda)
+lasso_model$beta
+write_rds(lasso_model,"lasso_model.rds")
+
+predicted.training.y = predict(lasso_model, s = best_lambda, newx = training.x)
+predicted.testing.y = predict(lasso_model, s = best_lambda, newx = testing.x)
+
+# AUC metric for training set and validation set
+
+library(pROC)
+
+auc(training.y, predicted.training.y[,1]) # 1
+roc.training <- roc(training.y, predicted.training.y[,1])
+png("roc.training.png")
+plot(roc.training)
+dev.off()
+
+auc(testing.y, predicted.testing.y[,1]) # 0.5357
+roc.testing <- roc(testing.y, predicted.testing.y[,1])
+png("roc.testing.png")
+plot(roc.testing)
+dev.off()
+
+```
+
+```{r Hyperopia, by races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+# #linear <- function(meth,cov){
+#   methDF = meth %>% as.numeric()
+#   dat <- data.frame(y = methDF, cov)
+#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+#   mod <- try(lm(ff, data = dat),silent = TRUE)
+#   N <- sum(!is.na(dat[,1]))
+#   if (class(mod)=="lm") {
+#     coefs = summary(mod)$coefficients
+#     coef = coefs[2,"Estimate"]
+#     SE = coefs[2,"Std. Error"]
+#     t.value = coefs[2,"t value"]
+#     p.value = coefs[2,"Pr(>|t|)"]
+#     out = c(coef, SE, t.value, p.value, N) 
+#   } else {
+#     out = c(rep(NA,4), N)
+#   }
+#   names(out) = c("Beta","SE", "t", "P", "N")
+#   return(out) 
+# }
+
+# a = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") 
+# table(a$raceg)
+#   1   2   3   4 
+# 368 172 819  93 
+
+varName="hyperopia_b"
+
+
+for(racenum in 1:4){
+#racenum=4
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  filter(raceg==racenum) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[which(rownames(methyl1)=='cg00002186'),,drop=FALSE]
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  # plot(methylt[1,],covs1$hyperopia_b)
+  # dat <- data.frame(meth = methylt[1,], covs1) %>% dplyr::select(one_of(varName),meth,everything())
+  # ff  <- formula(paste(varName," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  # mod <- try(glm(ff, data = dat, family=binomial))
+  # cf = try(summary(mod)$coefficients)
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".race.",racenum,".ewas.lm.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}}
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="hyperopia_b"
+
+# DMR and genelook up
+
+for(racenum in 1:4){
+#racenum=1
+
+  results <- fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+    filter(UCSC_RefGene_Name!="")
+  sigones_results = results[1:100,] 
+  
+  gene_list = read.csv("gene_list.csv")
+  genelookup_results = results %>%
+    mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+    filter(gene %in% gene_list$gene) %>%
+    arrange(as.numeric(P)) %>%
+    dplyr::select(-gene)
+  
+  lookuptotal = rbind(sigones_results,genelookup_results) %>%
+    as.data.frame() 
+  
+  write.csv(lookuptotal,paste0("lookup.",varName,".race.",racenum,".ewas.lm.csv"))
+  
+  data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+  annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+    getAnnotation %>%
+    as.data.frame %>%
+    mutate(start=pos,
+           end=pos,
+           probe=Name) %>%
+    dplyr::select(chr,start,end,probe) 
+  
+  raw = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) 
+  raw1 = raw %>%
+    as.data.frame() %>%
+    dplyr::rename("probe"="cpg",
+                  "p"="P") %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+}
+
+# no DMR is detected for any race
+
+
+# pathway analysis
+# R 4.0.0
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="hyperopia_b"
+
+for(racenum in 1:4){
+  #racenum=1
+  model_anno <- fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    arrange(by=P) %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+  raw_100 = model_anno[1:100,]
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(varName,"_race",racenum,"_pathways_top_100.csv"))
+    
+}
+
+```
+
+```{r meta-analysis of individual races}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(metafor)
+library(reshape)
+
+fixed.effects.meta.analysis <- function(list.of.studies,data){
+  require(metafor)
+  coefs = data[,c("CpG",paste0("coef.",list.of.studies))]
+  ses = data[,c("CpG",paste0("se.",list.of.studies))]
+  require(reshape)
+  coefs = melt(coefs)
+  names(coefs) <- c("CpG","set","coef")
+  ses = melt(ses)
+  data.long = cbind(coefs,ses[,"value"])
+  names(data.long)<-c("CpG","set","coef","se")
+  res = split(data.long, f=data$CpG)
+  res = lapply(res, function(x) rma.uni(slab=x$set,
+                                        yi=x$coef,
+                                        sei=x$se,
+                                        method="FE",
+                                        weighted=TRUE))
+  res
+}
+
+extract.and.merge.meta.analysis <-function(meta.res,data){
+  require(plyr)
+  data.meta = ldply(lapply(meta.res, function(x)
+    unlist(c(x$b[[1]],x[c("se","pval","k","QE","QEp","I2","H2")]))))
+  colnames(data.meta)<-c("CpG","coef.fe","se.fe","p.fe","set_nums",
+                         "q.fe","het.p.fe","i2.fe","h2.fe")
+  data = merge(data,data.meta,by="CpG",all.x=T)
+  data
+}
+
+varName = "hyperopia_b"
+
+#file.list.subs = list.files() 
+
+racenum = 1
+label.file1 = paste0("race",racenum)
+file1 = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file1) := Beta,
+                 !!paste0("se.", label.file1) := SE, 
+                 !!paste0("p.", label.file1) := P,
+                 !!paste0("ncase.", label.file1) := ncase,
+                 !!paste0("ncontrol.", label.file1) := ncontrol)
+
+racenum = 2
+label.file2 = paste0("race",racenum)
+file2 = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file2) := Beta,
+                 !!paste0("se.", label.file2) := SE, 
+                 !!paste0("p.", label.file2) := P,
+                 !!paste0("ncase.", label.file2) := ncase,
+                 !!paste0("ncontrol.", label.file2) := ncontrol)
+
+racenum = 3
+label.file3 = paste0("race",racenum)
+file3 = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file3) := Beta,
+                 !!paste0("se.", label.file3) := SE, 
+                 !!paste0("p.", label.file3) := P,
+                 !!paste0("ncase.", label.file3) := ncase,
+                 !!paste0("ncontrol.", label.file3) := ncontrol)
+
+racenum = 4
+label.file4 = paste0("race",racenum)
+file4 = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file4) := Beta,
+                 !!paste0("se.", label.file4) := SE, 
+                 !!paste0("p.", label.file4) := P,
+                 !!paste0("ncase.", label.file4) := ncase,
+                 !!paste0("ncontrol.", label.file4) := ncontrol)
+
+dat <- file1 %>% 
+  full_join(file2, by ="CpG") %>%
+  full_join(file3, by ="CpG")  %>%
+  full_join(file4, by ="CpG")  %>%
+  data.frame()
+
+studies <- c(label.file1,
+             label.file2,
+             label.file3,
+             label.file4)
+
+meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+
+fwrite(dat, paste0(varName,".race.meta.ewas.lm.txt"))
+
+############################################################
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="CpG") %>%
+  dplyr::select(CpG,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName = "hyperopia_b"
+
+results = fread( paste0(varName,".race.meta.ewas.lm.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  left_join(annoEPIC,by="CpG") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+  mutate(fdr=p.adjust(p.fe, method = "fdr", n=length(p.fe))) %>%
+  mutate(bf=p.adjust(p.fe, method = "bonferroni", n=length(p.fe))) 
+
+write.table(results,paste0(varName,".meta.ewas.annotated.lm.txt"),
+            quote=FALSE,
+            row.names = FALSE,
+            sep = '\t')
+
+results = results %>%
+  filter(UCSC_RefGene_Name!="")
+sigones_results = results[1:100,] 
+
+gene_list = read.csv("gene_list.csv")
+genelookup_results = results %>%
+  mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+  filter(gene %in% gene_list$gene) %>%
+  arrange(as.numeric(p.fe)) %>%
+  dplyr::select(-gene)
+
+lookuptotal = rbind(sigones_results,genelookup_results) %>%
+  as.data.frame() 
+
+write.csv(lookuptotal,paste0("lookup.",varName,".race.meta.ewas.lm.csv"))
+
+# DMR analysis
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe,Probe_maf,CpG_maf) 
+
+raw1 = fread(paste0(varName,".race.meta.ewas.lm.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  dplyr::rename("probe"="CpG",
+                "p"="p.fe") %>%
+  left_join(annoEPIC,by="probe") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))  %>%
+  as.data.frame() %>%
+  mutate(chr=sub("chr","",chr))%>%
+  dplyr::select(chr,start,end,probe,p) %>%
+  arrange(chr,start)%>%
+  na.omit()
+
+ipdmr(raw1,
+      include.all.sig.sites=FALSE,
+      region_plot=TRUE,
+      mht_plot=FALSE)
+
+# no DMR is detected
+
+########################################
+# pathway analysis
+# R 4.0.0
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(DescTools)
+library(org.Hs.eg.db)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe,Probe_maf,CpG_maf) 
+
+varName="hyperopia_b"
+model_anno = fread(paste0(varName,".race.meta.ewas.lm.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  dplyr::rename("probe"="CpG",
+                "p"="p.fe") %>%
+  left_join(annoEPIC,by="probe") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))  %>%
+  as.data.frame() 
+raw_100 = model_anno[1:100,]
+  
+raw_100_vec = as.numeric(raw_100$p)
+names(raw_100_vec) = raw_100$probe
+  
+res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+
+res1$term = "KEGG"
+res2$term = "GO"
+res_total = rbind(res1%>%filter(pvalue<0.05),
+                  res2%>%filter(pvalue<0.05)) %>%
+  as.data.frame()
+  
+write.csv(res_total,paste0(varName,"_race_meta_pathways_top_100.csv"))
+
+# extract cpgs that are enriched at KEGG id 04080
+genes = select(org.Hs.eg.db, as.character("04080"), "SYMBOL", keytype = "PATH")
+allAnno  = methylGSA:::getAnnot("EPIC", group = "all") 
+cpgs_pathways = allAnno %>%
+  as.data.frame() %>%
+  inner_join(genes,by=c("UCSC_RefGene_Name"="SYMBOL")) %>%
+  filter(Name %in% names(raw_100_vec))
+
+# only 1 hit
+## 100:1 ~ 272: whole genome
+#1 cg11494444             VIPR1               Body 04080
+# beta: 15.36272
+
+
+```
+
+```{r Global hyper and hypo methylation based on CpG locations}
+
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+varName="hyperopia_b"
+
+##########
+# all races, controlling for EPISTRUCTURES
+
+file = paste0(varName,".ewas.annotated.lm.txt")
+#file = paste0(varName,".meta.ewas.annotated.lm.txt")
+res = fread(file) %>%
+  mutate(hyper = ifelse(Beta>0,1,0)) 
+
+global = table(res$hyper,res$Relation_to_Island)
+global = apply(global,2,function(x) x/sum(x))
+rownames(global) = c("hypo-methylation","hyper-methylation")
+
+globalPic = global %>%  
+  as.data.frame() %>%
+  rownames_to_column(var="methylChange") %>%
+  reshape::melt(id="methylChange") %>%
+  dplyr::rename("location"="variable","percentage"="value") 
+
+globalPic %>%
+  ggplot(aes(x=location,y=percentage,fill=methylChange))+
+  geom_bar(stat = 'identity') +
+  theme_bw() +
+  ggtitle("Global methylation changes")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+ggsave(paste0(varName,"global.methyl.change.png"), width = 8,height = 6)
+
+##########
+# meta-analysis results
+
+file = paste0(varName,".meta.ewas.annotated.lm.txt")
+res = fread(file) %>%
+  mutate(hyper = ifelse(coef.fe>0,1,0)) 
+
+global = table(res$hyper,res$Relation_to_Island)
+global = apply(global,2,function(x) x/sum(x))
+rownames(global) = c("hypo-methylation","hyper-methylation")
+
+globalPic = global %>%  
+  as.data.frame() %>%
+  rownames_to_column(var="methylChange") %>%
+  reshape::melt(id="methylChange") %>%
+  dplyr::rename("location"="variable","percentage"="value") 
+
+globalPic %>%
+  ggplot(aes(x=location,y=percentage,fill=methylChange))+
+  geom_bar(stat = 'identity') +
+  theme_bw() +
+  ggtitle("Global methylation changes")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+ggsave(paste0(varName,".meta.global.methyl.change.png"), width = 8,height = 6)
+
+```
+
+```{r now many top hits are mQTLs?}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+varName = "hyperopia_b"
+
+allcpgs = fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  dplyr::select(cpg)
+#nrow(allcpgs)
+#[1] 641654
+
+epicmQTL = fread("../codes/mqtl.k.EPIC.sim") %>%
+  distinct(CpG,.keep_all = TRUE) %>%
+  filter(CpG %in% allcpgs$cpg)
+#nrow(nrow(epicmQTL))  
+# 246988
+
+model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt"))[1:100,] %>%
+  mutate(mqtl = ifelse(cpg %in% epicmQTL$CpG, 1, 0 ))
+table(model_anno$mqtl)
+#  0  1 
+# 30 70 
+
+#prop1 = nrow(epicmQTL)/nrow(allcpgs)
+#prop2 = table(model_anno$mqtl)[2]/nrow(model_anno)
+prop.test(x=c(table(model_anno$mqtl)[2], nrow(epicmQTL)),
+          n=c(nrow(model_anno),nrow(allcpgs)),
+          alternative = "two.sided")
+
+# 	2-sample test for equality of proportions with
+# 	continuity correction
+# 
+# data:  c(table(model_anno$mqtl)[2], nrow(epicmQTL)) out of c(nrow(model_anno), nrow(allcpgs))
+# X-squared = 40.601, df = 1, p-value = 1.867e-10
+# alternative hypothesis: two.sided
+# 95 percent confidence interval:
+#  0.2202505 0.4099015
+# sample estimates:
+#   prop 1   prop 2 
+# 0.700000 0.384924 
+
+############################################################
+
+allcpgs = fread(paste0(varName,".meta.ewas.annotated.lm.txt")) %>%
+  dplyr::select(CpG)
+#nrow(allcpgs)
+#[1] 643148
+
+epicmQTL = fread("../codes/mqtl.k.EPIC.sim") %>%
+  distinct(CpG,.keep_all = TRUE) %>%
+  filter(CpG %in% allcpgs$CpG)
+#nrow(epicmQTL)  
+# 247414
+
+model_anno_meta <- fread(paste0(varName,".meta.ewas.annotated.lm.txt"))[1:100,]%>%
+  mutate(mqtl = ifelse(CpG %in% epicmQTL$CpG, 1, 0 ))
+table(model_anno_meta$mqtl)
+#  0  1 
+# 46 54
+
+#prop1 = nrow(epicmQTL)/nrow(allcpgs)
+#prop2 = table(model_anno_meta$mqtl)[2]/nrow(model_anno_meta)
+prop.test(x=c(table(model_anno_meta$mqtl)[2], nrow(epicmQTL)),
+          n=c(nrow(model_anno_meta),nrow(allcpgs)),
+          alternative = "two.sided")
+
+# 	2-sample test for equality of proportions with continuity correction
+# 
+# data:  c(table(model_anno_meta$mqtl)[2], nrow(epicmQTL)) out of c(nrow(model_anno_meta), nrow(allcpgs))
+# X-squared = 9.5428, df = 1, p-value = 0.002007
+# alternative hypothesis: two.sided
+# 95 percent confidence interval:
+#  0.05261571 0.25799995
+# sample estimates:
+#    prop 1    prop 2 
+# 0.5400000 0.3846922 
+
+##there seems to be an enrichment of mQTLs!
+```
+
+```{r heatmap containing all cpgs}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(org.Hs.eg.db)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(stringr)
+library(DescTools)
+library(ComplexHeatmap)
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+varName= "hyperopia_b"
+
+resultsP = fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  as.data.frame() %>%
+  dplyr::select(cpg,P) 
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  arrange(.data[[varName]]) 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds") 
+methyl_1 = methyl[rownames(methyl) %in% resultsP$cpg,]
+
+common_subs = intersect(covs1$beadPosition,colnames(methyl_1))
+
+## calculate MAD3 for all CpGs
+#MAD <- apply(methyl_1, 1, MeanAD)
+#write_rds(MAD,'MAD.rds')
+MAD = read_rds('MAD.rds')
+
+vars = sort(-MAD)[1:2000]
+methyl_2 = methyl_1[names(vars),]
+
+mat = methyl_2[1:2000,common_subs] %>% as.matrix
+
+annos_subs = data.frame(beadPosition=colnames(mat)) %>%
+  left_join(covs1,by="beadPosition")
+
+column_ha = HeatmapAnnotation(caco = as.factor(annos_subs$hyperopia_b))
+
+pdf("hm.hyperopia.top200.pdf", width = 10, height = 20)
+ht = Heatmap(mat[1:200,], name = "methylation", 
+        top_annotation = column_ha,
+        show_column_names=FALSE,
+        show_row_names=FALSE)
+draw(ht)
+dev.off()
+
+pdf("hm.hyperopia.top200.by.caco.pdf", width = 10, height = 20)
+ht = Heatmap(mat[1:200,], name = "methylation", 
+        top_annotation = column_ha,
+        cluster_columns = FALSE,
+        cluster_rows = FALSE,
+        show_column_names=FALSE,
+        show_row_names=FALSE)
+draw(ht)
+dev.off()
+
+```
+
+```{r pathway specific analysis}
+
+################################################
+# pathway specific lookup
+
+# a list of potential pathways
+#https://www.thelancet.com/journals/ebiom/article/PIIS2352-3964(20)30253-X
+##the amphetamine addiction 
+##ECM-receptor interaction 
+##neuroactive ligand-receptor interaction 
+##regulation of actin cytoskeleton pathways  
+
+#https://www.nature.com/articles/s41598-021-88698-3
+# Enrichment for DE miRNA and mRNA for both macula and periphery
+## Phagosome
+## gap junction
+## hippo signaling pathway. 
+
+# strongest overall enrichment (for DE genes in the periphery)
+## oxidative phosphorylation
+
+# all pathways identified
+##Neuroactive ligand-receptor interaction
+##Adrenergic signaling in cardiomyocytes
+##Sphingolipid signaling pathway
+##Aldosterone-regulated sodium reabsorption
+##TG-beta signaling painway
+##cAMP signaling pathway
+##Serotonergic synapse
+##Long-term depression
+##cGMP-PKG signaling pathway.
+##Endocrine and other factor-regulated calcium reabsorption
+##Dorso-ventral axis formation
+##Biosynthesis of amino acids
+##Long-term potentiation
+##Glyoxylate and dicarboxylate metabolism
+##2#-Oxocarboxylic acid metabolism
+##Glycine, serine and threonine metabolism
+##Proximal tubule bicarbonate reclamation
+##Cardiac muscle contraction
+##Collecting duct acid secretion
+##Histidine metabolism
+##Ovarian steroidogenesis
+##Hedgehog signaling pathway
+##Carbon metabolism
+##Oocyte meiosis
+##Metabolic pathways
+##Vasopressin-regulated water reabsorption
+##Citrate cycle (TCA cycle)
+##Gap junction
+##Phagosome
+##Synaptic vesicle cycle
+##Hippo signaling pathway
+##Oxidative phosphorylation
+
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(org.Hs.eg.db)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(stringr)
+
+allPath = read.csv("../codes/target_pathway.csv") %>%
+  as.data.frame() %>%
+  mutate(kegg_id = str_pad(kegg_id, 5, pad = "0"))
+
+targetForNow = allPath %>%
+  #filter(kegg_id %in% c("05031","04512","04080","04810"))
+  filter(kegg_id %in% c("04080"))
+
+genes = select(org.Hs.eg.db, as.character(targetForNow$kegg_id), "SYMBOL", keytype = "PATH")
+allAnno  = methylGSA:::getAnnot("EPIC", group = "all") 
+
+cpgs_pathways = allAnno %>%
+  as.data.frame() %>%
+  inner_join(genes,by=c("UCSC_RefGene_Name"="SYMBOL")) %>%
+  inner_join(targetForNow,by=c("PATH"="kegg_id"))
+
+# pathway specific analysis
+varName= "hyperopia_b"
+results = fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  dplyr::select(-UCSC_RefGene_Name, -UCSC_RefGene_Group) %>%
+  inner_join(cpgs_pathways,by=c("cpg"="Name")) %>%
+  mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+  mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+  arrange(P)
+
+#write.csv(head(results,10),"targeted.pathway.all.n_35.csv")
+    
+################################################
+# pathway specific figures and annotations
+library(tidyverse)
+library(data.table)
+library(DescTools)
+library(methylGSA)
+library(org.Hs.eg.db)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+varName="hyperopia_b"
+
+genes = select(org.Hs.eg.db, as.character("04080"), "SYMBOL", keytype = "PATH")
+allAnno  = methylGSA:::getAnnot("EPIC", group = "all") 
+cpgs_pathways = allAnno %>%
+  as.data.frame() %>%
+  inner_join(genes,by=c("UCSC_RefGene_Name"="SYMBOL")) 
+# nrow(cpgs_pathways) 7823
+
+###
+# heatmap of most significant CpGs within the pathway
+library(ComplexHeatmap)
+
+resultsP = fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  as.data.frame() %>%
+  dplyr::select(cpg,P) 
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  arrange(.data[[varName]]) 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+
+methyl_1 = methyl[rownames(methyl)%in%cpgs_pathways$Name,covs1$beadPosition] %>%
+  as.data.frame() %>%
+  rownames_to_column(var="cpg") %>%
+  left_join(resultsP,by="cpg") %>%
+  na.omit() %>%
+  arrange(P) %>%
+  dplyr::select(-P) %>%
+  column_to_rownames(var="cpg")
+
+methyl_3 = methyl_1[1:50,] 
+
+annos_prep = data.frame(Name=rownames(methyl_3)) %>%
+  left_join(cpgs_pathways,by="Name") 
+  #filter(UCSC_RefGene_Name %in% names(which(table(.data$UCSC_RefGene_Name)>2)))
+
+mat = methyl_3[annos_prep$Name,] %>% as.matrix
+
+annos_subs = data.frame(beadPosition=colnames(mat)) %>%
+  left_join(covs1,by="beadPosition")
+
+column_ha = HeatmapAnnotation(caco = as.factor(annos_subs$hyperopia_b))
+
+row_ha = rowAnnotation(Gene_Name = annos_prep$UCSC_RefGene_Name, 
+                       Gene_Group = annos_prep$UCSC_RefGene_Group)
+
+pdf("hm.hyperopia.04080.pdf", width = 10, height = 10)
+ht = Heatmap(mat, name = "methylation", 
+        top_annotation = column_ha,
+        right_annotation = row_ha,
+        show_column_names=FALSE,
+        show_row_names=FALSE)
+draw(ht)
+dev.off()
+
+pdf("hm.hyperopia.04080.by.caco.pdf", width = 10, height = 10)
+ht = Heatmap(mat, name = "mat", 
+        top_annotation = column_ha,
+        right_annotation = row_ha,
+        cluster_columns = FALSE,
+        cluster_rows = FALSE,
+        show_column_names=FALSE,
+        show_row_names=FALSE)
+draw(ht)
+dev.off()
+
+# looks very sad, check out box plot for the top CpG
+rownames(mat)[1]
+
+data.frame(
+  cg11494444 = mat[1,],
+  caco = as.factor(annos_subs$hyperopia_b)
+) %>%
+  na.omit() %>%
+  ggplot(aes(x=caco, y=cg11494444, fill=caco)) +
+  geom_boxplot(outlier.size=0.2) +
+  theme_classic() 
+ggsave("check.top1.kegg.png")
+
+
+###
+# KEGG pathway map
+## Only look up enriched CpGs within the pathways (not all the CpGs in that pathway)
+## Predict levels of expression in the network map (not just levels of methylations)
+
+resultsP = fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  as.data.frame() %>%
+  dplyr::select(-UCSC_RefGene_Name,-UCSC_RefGene_Group) %>%
+  inner_join(cpgs_pathways,by=c("cpg"="Name")) %>%
+  arrange(P)
+
+head(resultsP[,c("cpg","Beta","P","fdr","bf","UCSC_RefGene_Name")],10)
+
+## local machine
+#BiocManager::install("pathview")
+library(pathview)
+#setwd("/Users/bo/Downloads")
+download.kegg(pathway.id = "04080", species = "hsa", file.type=c("xml", "png"))
+# coloring top 10 genes in photoshop
+
+```
+
+```{r Hyperopia, sensitivity check, adjusting for family eye disease history in EWAS model}
+
+# step 1
+# by races individual analysis 
+# 0816: waiting for XJJ's variable data
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+# a = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") 
+# table(a$raceg)
+#   1   2   3   4 
+# 368 172 819  93 
+
+varName="hyperopia_b"
+
+# FHstrabismus as a proxy variable, not necessarily good but closer to actual ratio!
+
+famhis = fread("/project/wiemels_494/sebastian/eyeDisease/codes/fam_his.csv") %>%
+  as.data.frame() %>%
+  distinct(ptid,.keep_all=TRUE) %>%
+  filter(FHstrabismus %in% c(0,1)) %>%
+  mutate(FHstrabismus = as.factor(FHstrabismus))%>%
+  dplyr::select(ptid,FHstrabismus)
+
+covs0 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  left_join(famhis,by="ptid")
+  
+
+for(racenum in 1:4){
+
+#racenum=1
+
+covs1 = covs0 %>%
+  filter(raceg==racenum) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,FHstrabismus) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[which(rownames(methyl1)=='cg00002186'),,drop=FALSE]
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  # plot(methylt[1,],covs1$hyperopia_b)
+  # dat <- data.frame(meth = methylt[1,], covs1) %>% dplyr::select(one_of(varName),meth,everything())
+  # ff  <- formula(paste(varName," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  # mod <- try(glm(ff, data = dat, family=binomial))
+  # cf = try(summary(mod)$coefficients)
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}}
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="hyperopia_b"
+
+# DMR and genelook up
+
+gene_list = read.csv("gene_list.csv")
+
+for(racenum in 1:4){
+#racenum=1
+
+  results <- fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+    filter(UCSC_RefGene_Name!="")
+  sigones_results = results[1:100,] 
+  
+  genelookup_results = results %>%
+    mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+    filter(gene %in% gene_list$gene) %>%
+    arrange(as.numeric(P)) %>%
+    dplyr::select(-gene)
+  
+  lookuptotal = rbind(sigones_results,genelookup_results) %>%
+    as.data.frame() 
+  
+  write.csv(lookuptotal,paste0("lookup.",varName,".race.",racenum,".ewas.lm.sensitivity.famhis.csv"))
+
+}
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="hyperopia_b"
+
+for(racenum in 1:4){
+  #racenum=1
+  model_anno <- fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    arrange(by=P) %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+  raw_100 = model_anno[1:100,]
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(varName,"_race",racenum,"_pathways_top_100.sensitivity.famhis.csv"))
+    
+}
+
+# race 4 doesn't have any significant terms
+
+## meta-analysis
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(metafor)
+library(reshape)
+
+fixed.effects.meta.analysis <- function(list.of.studies,data){
+  require(metafor)
+  coefs = data[,c("CpG",paste0("coef.",list.of.studies))]
+  ses = data[,c("CpG",paste0("se.",list.of.studies))]
+  require(reshape)
+  coefs = melt(coefs)
+  names(coefs) <- c("CpG","set","coef")
+  ses = melt(ses)
+  data.long = cbind(coefs,ses[,"value"])
+  names(data.long)<-c("CpG","set","coef","se")
+  res = split(data.long, f=data$CpG)
+  res = lapply(res, function(x) rma.uni(slab=x$set,
+                                        yi=x$coef,
+                                        sei=x$se,
+                                        method="FE",
+                                        weighted=TRUE))
+  res
+}
+
+extract.and.merge.meta.analysis <-function(meta.res,data){
+  require(plyr)
+  data.meta = ldply(lapply(meta.res, function(x)
+    unlist(c(x$b[[1]],x[c("se","pval","k","QE","QEp","I2","H2")]))))
+  colnames(data.meta)<-c("CpG","coef.fe","se.fe","p.fe","set_nums",
+                         "q.fe","het.p.fe","i2.fe","h2.fe")
+  data = merge(data,data.meta,by="CpG",all.x=T)
+  data
+}
+
+varName = "hyperopia_b"
+
+#file.list.subs = list.files() 
+
+racenum = 1
+label.file1 = paste0("race",racenum)
+file1 = fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file1) := Beta,
+                 !!paste0("se.", label.file1) := SE, 
+                 !!paste0("p.", label.file1) := P,
+                 !!paste0("ncase.", label.file1) := ncase,
+                 !!paste0("ncontrol.", label.file1) := ncontrol)
+
+racenum = 2
+label.file2 = paste0("race",racenum)
+file2 = fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file2) := Beta,
+                 !!paste0("se.", label.file2) := SE, 
+                 !!paste0("p.", label.file2) := P,
+                 !!paste0("ncase.", label.file2) := ncase,
+                 !!paste0("ncontrol.", label.file2) := ncontrol)
+
+racenum = 3
+label.file3 = paste0("race",racenum)
+file3 = fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file3) := Beta,
+                 !!paste0("se.", label.file3) := SE, 
+                 !!paste0("p.", label.file3) := P,
+                 !!paste0("ncase.", label.file3) := ncase,
+                 !!paste0("ncontrol.", label.file3) := ncontrol)
+
+racenum = 4
+label.file4 = paste0("race",racenum)
+file4 = fread(paste0(varName,".race.",racenum,".ewas.lm.sensitivity.famhis.txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( "CpG"="cpg",
+                 !!paste0("coef.", label.file4) := Beta,
+                 !!paste0("se.", label.file4) := SE, 
+                 !!paste0("p.", label.file4) := P,
+                 !!paste0("ncase.", label.file4) := ncase,
+                 !!paste0("ncontrol.", label.file4) := ncontrol)
+
+dat <- file1 %>% 
+  full_join(file2, by ="CpG") %>%
+  full_join(file3, by ="CpG")  %>%
+  full_join(file4, by ="CpG")  %>%
+  data.frame()
+
+studies <- c(label.file1,
+             label.file2,
+             label.file3,
+             label.file4)
+
+meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+
+fwrite(dat, paste0(varName,".race.meta.ewas.lm.sensitivity.famhis.txt"))
+
+############################################################
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="CpG") %>%
+  dplyr::select(CpG,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName = "hyperopia_b"
+
+results = fread( paste0(varName,".race.meta.ewas.lm.sensitivity.famhis.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  left_join(annoEPIC,by="CpG") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+  mutate(fdr=p.adjust(p.fe, method = "fdr", n=length(p.fe))) %>%
+  mutate(bf=p.adjust(p.fe, method = "bonferroni", n=length(p.fe))) 
+
+write.table(results,paste0(varName,".race.meta.ewas.annotated.lm.sensitivity.famhis.txt"),
+            quote=FALSE,
+            row.names = FALSE,
+            sep = '\t')
+
+results = results %>%
+  filter(UCSC_RefGene_Name!="")
+sigones_results = results[1:100,] 
+
+gene_list = read.csv("gene_list.csv")
+genelookup_results = results %>%
+  mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+  filter(gene %in% gene_list$gene) %>%
+  arrange(as.numeric(p.fe)) %>%
+  dplyr::select(-gene)
+
+lookuptotal = rbind(sigones_results,genelookup_results) %>%
+  as.data.frame() 
+
+write.csv(lookuptotal,paste0("lookup.",varName,".race.meta.ewas.lm.sensitivity.famhis.csv"))
+
+# DMR analysis
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe,Probe_maf,CpG_maf) 
+
+raw1 = fread(paste0(varName,".race.meta.ewas.lm.sensitivity.famhis.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  dplyr::rename("probe"="CpG",
+                "p"="p.fe") %>%
+  left_join(annoEPIC,by="probe") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))  %>%
+  as.data.frame() %>%
+  mutate(chr=sub("chr","",chr))%>%
+  dplyr::select(chr,start,end,probe,p) %>%
+  arrange(chr,start)%>%
+  na.omit()
+
+ipdmr(raw1,
+      include.all.sig.sites=FALSE,
+      region_plot=TRUE,
+      mht_plot=FALSE)
+
+# no DMR is detected
+
+########################################
+# pathway analysis
+# R 4.0.0
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe,Probe_maf,CpG_maf) 
+
+varName="hyperopia_b"
+model_anno = fread(paste0(varName,".race.meta.ewas.lm.sensitivity.famhis.txt")) %>%
+  as.data.frame() %>%
+  filter(!is.na(p.fe))%>%
+  arrange(p.fe) %>%
+  dplyr::rename("probe"="CpG",
+                "p"="p.fe") %>%
+  left_join(annoEPIC,by="probe") %>%
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))  %>%
+  as.data.frame() 
+raw_100 = model_anno[1:100,]
+  
+raw_100_vec = as.numeric(raw_100$p)
+names(raw_100_vec) = raw_100$probe
+  
+res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+
+res1$term = "KEGG"
+res2$term = "GO"
+res_total = rbind(res1%>%filter(pvalue<0.05),
+                  res2%>%filter(pvalue<0.05)) %>%
+  as.data.frame()
+  
+write.csv(res_total,paste0(varName,"_race_meta_pathways_top_100.sensitivity.famhis.csv"))
+    
+```
+
+NN to predict outcome
+
+```{python  Files preparation}
+#Split hyperopia into triaining and validation (70/30) and predict hyperopia with DNA methylation
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import pickle
+from scipy.stats.mstats import winsorize
+
+#pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+eye_clinical = pyreadr.read_r('/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds')[None]
+eye_clinical = eye_clinical.set_index('beadPosition')
+
+var='hyperopia_b'
+
+varOI_sub = (
+    eye_clinical.query("{0}==1|diseases==0".format(var))
+    )
+# (1261, 69)
+
+varOI_sub['hyperopia_b'].value_counts()
+#0    761
+#1    496
+
+# choose 70% training and 30% validation from cases and controls separately
+
+a = varOI_sub[varOI_sub['hyperopia_b']==0].sample(frac=0.7)
+b = varOI_sub[varOI_sub['hyperopia_b']==1].sample(frac=0.7)
+
+training =  pd.concat([a,b],axis=0)
+validation = varOI_sub[~varOI_sub.index.isin(training.index)]
+
+
+# include 'raceg', 'gender', 'BIRTH_WEIGHT_CDPH','epi1',
+#       'epi2', 'epi3', 'epi4', 'epi5', 'epi6', 'epi7', 'epi8', 'epi9', 'epi10',
+#       'CD8T', 'CD4T', 'NK', 'Bcell', 'Mono', 'Gran', 'nRBC'
+#         in the prediction variable
+
+kept_columns = [var,'raceg', 'gender', 'BIRTH_WEIGHT_CDPH', 'epi1',
+               'epi2', 'epi3', 'epi4', 'epi5', 'epi6', 'epi7', 'epi8', 'epi9', 'epi10',
+               'CD8T', 'CD4T', 'NK', 'Bcell', 'Mono', 'Gran', 'nRBC']
+training_1 = training[kept_columns]
+validation_1 = validation[kept_columns]
+
+# read methylation file
+annoEpic = pyreadr.read_r('/project/wiemels_494/sebastian/ML/ALL/tsf/annoEPIC.rds')
+annoEpic = annoEpic[None]
+annoEpic_drop = (
+     annoEpic
+     .query("Probe_maf>=0.05|CpG_maf>=0.05")
+     .loc[:,'Name']
+)
+
+eye_meth = pd.read_csv("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.txt",sep='\t')
+commonCpGs = list(filter(lambda cpg: ( (cpg.find('cg')!=-1) & (cpg not in list(annoEpic_drop))),eye_meth.index))
+
+#filehandler = open("commonCpGs.obj", 'rb') 
+#commonCpGs = pickle.load(filehandler)
+
+training_meth = eye_meth.loc[commonCpGs,training_1.index]
+validation_meth = eye_meth.loc[commonCpGs,validation_1.index]
+
+train_cpgs = training_meth.transpose()
+train_df = pd.concat([training_1,train_cpgs],axis=1)
+
+y_train = train_df[var]
+x_train = train_df.drop([var],axis=1)
+
+val_cpgs = validation_meth.transpose()
+val_df = pd.concat([validation_1,val_cpgs],axis=1)
+
+y_val = val_df[var]
+x_val = val_df.drop([var],axis=1)
+
+trainingValSet = list([x_train,y_train,x_val,y_val])
+
+# save files 
+
+filehandler = open("/project/wiemels_494/sebastian/eyeDisease/NN/trainingValSet.obj", 'wb') 
+pickle.dump(trainingValSet, filehandler)
+
+```
+
+```{bash sbatch sample file}
+
+#cd /project/wiemels_494/sebastian/eyeDisease/NN
+#sbatch /project/wiemels_494/sebastian/eyeDisease/NN/codes/temp.sh
+  
+## creating a conda environment
+
+# module load anaconda3
+# conda init bash
+# source ~/.bashrc
+# conda config --set auto_activate_base false
+
+# mamba create --name tf-gpu
+conda activate tf-gpu
+
+#To deactivate an environment
+conda deactivate
+
+## Running Anaconda in batch mode
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=120GB
+#SBATCH --job-name=eye
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:v100:1
+module purge
+eval "$(conda shell.bash hook)"
+conda activate tf-gpu
+python3 /project/wiemels_494/sebastian/eyeDisease/codes/temp.py
+
+```
+
+Basic neural network model
+
+```{python Basic neural network model}
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# 228 controls and 149 cases. choose 149 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:149,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+## making sure the order of columns x_train and x_val are identical
+list(x_train.columns)==list(x_val.columns)
+
+## a very simple version of NN
+checkpoint_path = 'intermediateObj'
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=200)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])
+class_weight = {0: weight_for_0, 1: weight_for_1}
+
+y_train = np.asarray(y_train).astype('float32')
+y_val = np.asarray(y_val).astype('float32')
+
+model = keras.Sequential([
+    layers.Dense(2048, activation='relu', input_shape=[x_train.shape[1]]),
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(2048, activation='relu'),
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(1024, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(256, activation='relu'),
+    layers.Dense(1,activation='sigmoid'),
+])
+
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+history = model.fit(
+    x_train, y_train,
+    validation_data=(x_val, y_val),
+    batch_size=300,
+    epochs=1000,
+    verbose=0,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("history_frame.csv")
+
+model.save('model.h5')
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+    
+# examine the loss and metric plots
+#model = load_model('intermediateObj/model.h5') 
+history_frame = pd.read_csv("history_frame.csv")
+
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss.png')
+
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc.png')
+```
+
+```{python check the performance on training and validation}
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+# load trained model
+model = keras.models.load_model('model.h5')
+
+# predict model on different sets
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+pred_train = model.predict(x_train)
+pred_val = model.predict(x_val)
+pred_res = list([pred_train,pred_val])
+
+filehandler = open("pred_res.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+####################################
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("pred_res.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# figures and tables showing concordance
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.png')
+
+```
+
+convolutional neural network
+
+```{python convolutional nerural network}
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+sample_size = x_train.shape[0]
+time_steps = x_train.shape[1]
+input_dimension = 1
+x_train_reshaped = x_train.values.reshape(sample_size,time_steps,input_dimension)
+
+# 228 controls and 149 cases. choose 149 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:149,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+sample_size_val = x_val.shape[0]
+x_val_reshaped = x_val.values.reshape(sample_size_val,time_steps,input_dimension)
+
+checkpoint_path = 'intermediateObj'
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=10)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])
+class_weight = {0: weight_for_0, 1: weight_for_1}
+
+## a very simple version of CNN
+
+model = keras.Sequential([
+    layers.Conv1D(filters=30, kernel_size=1000, strides = 500, activation="relu",
+                  input_shape=(time_steps,input_dimension)),
+    layers.Dropout(0.3),
+    layers.Conv1D(filters=10, kernel_size=50, activation="relu"),
+    layers.Dropout(0.3),    
+    layers.MaxPooling1D(),
+    layers.Flatten(),
+    layers.Dense(256, activation='softmax'),
+    layers.Dropout(0.3),
+    layers.Dense(128, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+
+y_train = np.asarray(y_train).astype('float32')
+y_val = np.asarray(y_val).astype('float32')
+
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=10,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("history_frame_cnn.csv")
+
+model.save('model_cnn.h5')
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+    
+# examine the loss and metric plots
+history_frame = pd.read_csv("history_frame_cnn.csv")
+
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_cnn.png')
+
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_cnn.png')
+
+
+```
+
+```{python check the performance on training and validation}
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+# load trained model
+model = keras.models.load_model('model_cnn.h5')
+
+# predict model on different sets
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_train_reshaped = x_train.values.reshape(x_train.shape[0],x_train.shape[1],1)
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+x_val_reshaped = x_val.values.reshape(x_val.shape[0],x_val.shape[1],1)
+
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_res = list([pred_train,pred_val])
+
+filehandler = open("pred_res_cnn.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+####################################
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("pred_res_cnn.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# figures and tables showing concordance
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.cnn.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.cnn.png')
+```
+
+recurrent neural network
+
+```{python}
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+sample_size = x_train.shape[0]
+time_steps = x_train.shape[1]
+input_dimension = 1
+x_train_reshaped = x_train.values.reshape(sample_size,time_steps,input_dimension)
+
+# 228 controls and 149 cases. choose 149 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:149,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+sample_size_val = x_val.shape[0]
+x_val_reshaped = x_val.values.reshape(sample_size_val,time_steps,input_dimension)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])
+class_weight = {0: weight_for_0, 1: weight_for_1}
+checkpoint_path = 'intermediateObj'
+
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=10)
+
+## simple RNN
+model = keras.Sequential([
+    layers.SimpleRNN(2000, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+y_train = np.asarray(y_train).astype('float32')
+y_val = np.asarray(y_val).astype('float32')
+
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=100,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("history_frame_SimpleRNN.csv")
+model.save('model_SimpleRNN.h5')
+
+## LSTM
+
+model = keras.Sequential([
+    layers.LSTM(2000, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+y_train = np.asarray(y_train).astype('float32')
+y_val = np.asarray(y_val).astype('float32')
+
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=100,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("history_frame_LSTM.csv")
+model.save('model_LSTM.h5')
+
+# GRU
+model = keras.Sequential([
+    layers.GRU(2000, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=100,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("history_frame_GRU.csv")
+model.save('model_GRU.h5')
+
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+    
+# examine the loss and metric plots
+history_frame = pd.read_csv("history_frame_SimpleRNN.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_SimpleRNN.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_SimpleRNN.png')
+
+history_frame = pd.read_csv("history_frame_LSTM.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_LSTM.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_LSTM.png')
+
+history_frame = pd.read_csv("history_frame_GRU.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_GRU.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_GRU.png')
+ 
+```
+
+```{python check the performance on training and validation}
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+# predict model on different sets
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_train_reshaped = x_train.values.reshape(x_train.shape[0],x_train.shape[1],1)
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+x_val_reshaped = x_val.values.reshape(x_val.shape[0],x_val.shape[1],1)
+
+# load trained model: SimpleRNN
+model = keras.models.load_model('model_SimpleRNN.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_res = list([pred_train,pred_val])
+filehandler = open("pred_res_SimpleRNN.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+# load trained model: LSTM
+model = keras.models.load_model('model_LSTM.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_res = list([pred_train,pred_val])
+filehandler2 = open("pred_res_LSTM.obj", 'wb') 
+pickle.dump(pred_res, filehandler2)
+
+# load trained model: GRU
+model = keras.models.load_model('model_GRU.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_res = list([pred_train,pred_val])
+filehandler3 = open("pred_res_GRU.obj", 'wb') 
+pickle.dump(pred_res, filehandler3)
+
+####################################
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+
+filehandler = open("trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# figures and tables showing concordance: SimpleRNN
+filehandler = open("pred_res_SimpleRNN.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.SimpleRNN.png')
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.SimpleRNN.png')
+
+# figures and tables showing concordance: LSTM
+filehandler = open("pred_res_LSTM.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.LSTM.png')
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.LSTM.png')
+
+# figures and tables showing concordance: GRU
+filehandler = open("pred_res_GRU.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.GRU.png')
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.GRU.png')
+
+```
+
+########################
+
+EWAS models (2): astigmatism
+
+```{r all races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+# #linear <- function(meth,cov){
+#   methDF = meth %>% as.numeric()
+#   dat <- data.frame(y = methDF, cov)
+#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+#   mod <- try(lm(ff, data = dat),silent = TRUE)
+#   N <- sum(!is.na(dat[,1]))
+#   if (class(mod)=="lm") {
+#     coefs = summary(mod)$coefficients
+#     coef = coefs[2,"Estimate"]
+#     SE = coefs[2,"Std. Error"]
+#     t.value = coefs[2,"t value"]
+#     p.value = coefs[2,"Pr(>|t|)"]
+#     out = c(coef, SE, t.value, p.value, N) 
+#   } else {
+#     out = c(rep(NA,4), N)
+#   }
+#   names(out) = c("Beta","SE", "t", "P", "N")
+#   return(out) 
+# }
+
+varName="astigm2g_b"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.lm.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="astigm2g_b"
+
+results <- fread(paste0(varName,".ewas.lm.txt")) %>% #717427
+  dplyr::filter(grepl('cg', cpg)) %>% # 715722
+  filter(!is.na(P))%>%
+  left_join(annoEPIC,by="cpg") %>%
+  arrange(by=P) %>% 
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) #641654
+
+Nbeta <- sum(!is.na(results$P))
+tmp <- results[!is.na(results$P),]
+lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+print(round(lambda, 2))
+#[1] 0.87
+
+results <- results %>%
+  mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+  mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+
+write.table(results,paste0(varName,".ewas.annotated.lm.txt"),
+            quote=FALSE,
+            row.names = FALSE,
+            sep = '\t')
+
+print(results[1,])
+#           cpg      Beta       SE         Z            P ncase ncontrol   chr
+# 1: cg08840230 -41.11665 8.836339 -4.653132 3.269303e-06   120      761 chr19
+#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 15622718            S_Shelf           CYP4F22        NA              5'UTR
+#    CpG_maf Regulatory_Feature_Group       fdr bf
+# 1:      NA                          0.9999859  1
+
+
+####################################
+# figures (qq plot and manhattan)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(CMplot)
+library(QCEWAS)
+library(qqman)
+
+varName="astigm2g_b"
+
+model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  arrange(log(fdr))%>%
+  dplyr::mutate(cpg_name=cpg,estimate=Beta, std_error=SE,p_val=P)
+
+annotation = model_anno%>%
+  filter(fdr<0.5)%>%
+  filter(UCSC_RefGene_Name!="") %>%
+  mutate(gene.highlight = sub(";.*$","",UCSC_RefGene_Name))
+cpg.highlight = annotation$cpg_name
+genes.highlight = annotation$gene.highlight
+
+outcomes_model_CM_plot <- model_anno%>%
+  dplyr::mutate(p_val_cmplot = -log10(p_val))%>%
+  dplyr::mutate(p_val_cmplot= ifelse(estimate<0,-p_val_cmplot, p_val_cmplot )) %>%
+  dplyr::select(cpg_name, chr,pos, p_val_cmplot)
+outcomes_model_CM_plot$chr <- gsub("chr","",outcomes_model_CM_plot$chr)
+
+CMplot(outcomes_model_CM_plot,
+       plot.type="m",
+       band=0, 
+       cex=c(0.5,0.5,0.5),
+       amplify=FALSE,
+       LOG10=FALSE,  
+       signal.col=NULL,
+       chr.den.col=NULL,
+       # threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
+       # threshold.lty=2, 
+       # threshold.lwd=1, 
+       # threshold.col="black", 
+       highlight=cpg.highlight,
+       highlight.text=genes.highlight, 
+       file="jpg",
+       memo=paste0(varName,".ewas.annotated.manhattan"),
+       dpi=500,file.output=TRUE,verbose=TRUE)
+
+outcomes_model_qq <- model_anno %>% 
+  dplyr::select(cpg_name,p_val)%>%
+  dplyr::mutate(ID=cpg_name, P=p_val)
+lambda <- P_lambda(outcomes_model_qq$P)
+
+tiff(paste0(varName,".ewas.qq.tiff"), width = 10, height = 7, units = 'in', res = 300)
+qq(outcomes_model_qq$P)
+dev.off()
+
+####################################
+# pathway analysis 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+varName="astigm2g_b"
+
+model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+  as.data.frame() %>%
+  arrange(P)
+
+raw_100 = model_anno %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+raw_100 = raw_100[1:100,]
+
+raw_100_vec = as.numeric(raw_100$p_val)
+names(raw_100_vec) = raw_100$cpg_name
+
+res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+#write_rds(res1,"res1.rds")
+#res1 = read_rds("res1.rds")
+res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+
+res1$term = "KEGG"
+res2$term = "GO"
+res_total = rbind(res1%>%filter(pvalue<0.05),
+                  res2%>%filter(pvalue<0.05)) %>%
+  as.data.frame()
+  
+write.csv(res_total,paste0(varName,"_pathways_top_100.csv"))
+  
+####################################
+# DMR analysis (in R 4.0.0)
+# module load gcc/8.3.0  
+# module load openblas/0.3.8
+# module load r/4.0.0
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+varName="astigm2g_b"
+
+raw = fread(paste0(varName,".ewas.annotated.lm.txt")) 
+raw1 = raw %>%
+  as.data.frame() %>%
+  dplyr::rename("probe"="cpg",
+                "p"="P") %>%
+  dplyr::select(probe,p) %>%
+  inner_join(annoEPIC,by="probe") %>%
+  mutate(chr=sub("chr","",chr))%>%
+  arrange(chr,start)%>%
+  na.omit()
+
+ipdmr(raw1,
+      include.all.sig.sites=FALSE,
+      region_plot=TRUE,
+      mht_plot=FALSE)
+
+# no dmr is detected!
+
+####################################
+###gene look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+gene_list = read.csv("gene_list.csv")
+
+varName="astigm2g_b"
+results= fread(paste0(varName,".ewas.annotated.lm.txt"))
+sigones_results = results[1:100,] 
+
+genelookup_results = results %>%
+  mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+  filter(gene %in% gene_list$gene) %>%
+  arrange(as.numeric(P)) %>%
+  dplyr::select(-gene)
+
+lookuptotal = rbind(sigones_results,genelookup_results) %>%
+  as.data.frame() 
+
+write.csv(lookuptotal,paste0("lookup.",varName,".all.races.ewas.lm.csv"))
+
+####################################
+###CORSIV look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+cors = fread("/project/wiemels_260/sebastian/CORSIV/CoRSIVswAnnotation.txt") %>%
+  as.data.frame() %>%
+  dplyr::select(CG,cluster_id) 
+
+varName="astigm2g_b"
+results= fread(paste0(varName,".ewas.annotated.lm.txt")) 
+results_top = results[1:100,] %>%
+  rownames_to_column(var="rank") %>%
+  dplyr::select(rank,cpg,Beta,UCSC_RefGene_Name,P,fdr) %>%
+  left_join(cors,by=c("cpg"="CG")) %>%
+  na.omit()
+if(nrow(results_top)>0){
+  write.csv(results_top,paste0(varName,".corsvi.lookup.all.races.csv"))}
+
+```
+
+```{r severe astigmatism, all races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+linear <- function(meth, var, cov){
+  
+  dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+    filter(is.finite(meth))
+  ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  mod <- try(lm(ff, data = dat),silent=TRUE)
+  N <- sum(!is.na(dat[,1]))
+  if (class(mod)=="lm") {
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    t.value = coefs[2,"t value"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, t.value, p.value, N)
+  } else {
+    out = c(rep(NA,4), N)
+  }
+  names(out) = c("Beta","SE", "t", "P", "N")
+  return(out)
+}
+
+############################################################
+
+varName="astigm2g_b2"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.logistic.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+############################################################
+
+varName="astigm_bg3"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter( .data[[varName]] %in% c(1,2) | diseases==0) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,linear,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, linear, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".ewas.linear.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+############################################################
+# astigm_bg3 case only
+
+varName="astigm_bg3"
+
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() 
+
+covs1[varName]=covs1[varName]-1
+table(covs1[varName])
+
+covs1 = covs1 %>%
+  filter(.data[[varName]] %in% c(0,1)) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[1:100,] 
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,"case.only.ewas.logistic.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}
+
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+for(varName in c("astigm2g_b2","astigm_bg3","astigm_bg3.case.only")){
+  
+   #varName="astigm_bg3"
+  
+  if(varName=="astigm2g_b2") filename=paste0(varName,".ewas.logistic.txt")
+  if(varName=="astigm_bg3") filename=paste0(varName,".ewas.linear.txt")
+  if(varName=="astigm_bg3.case.only") filename=paste0(varName,".ewas.logistic.txt")
+  
+  print(varName)
+  
+  results <- fread(filename) %>% #717427
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) #641654
+  
+  Nbeta <- sum(!is.na(results$P))
+  tmp <- results[!is.na(results$P),]
+  lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  
+  print(round(lambda, 2))
+  
+  results <- results %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+  
+  write.table(results,paste0(varName,".ewas.annotated.lm.txt"),
+              quote=FALSE,
+              row.names = FALSE,
+              sep = '\t')
+  
+  print(results[1,])
+  
+}
+
+# [1] "astigm2g_b2"
+# [1] 1.06
+#           cpg      Beta      SE         Z            P ncase ncontrol   chr
+# 1: cg04904609 -89.01431 19.5928 -4.543215 5.540267e-06    73      761 chr10
+#          pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 131691217            N_Shelf              EBF3  0.034752               Body
+#    CpG_maf Regulatory_Feature_Group       fdr bf
+# 1:      NA                          0.9738049  1
+
+# [1] "astigm_bg3"
+# [1] 0.94
+#           cpg      Beta        SE         t            P   N  chr       pos
+# 1: cg15141238 -1.890035 0.3605925 -5.241471 2.013162e-07 881 chr9 114248143
+#    Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group CpG_maf
+# 1:            S_Shore          KIAA0368        NA            TSS1500      NA
+#    Regulatory_Feature_Group       fdr        bf
+# 1:                          0.1291753 0.1291753
+
+# [1] "astigm_bg3.case.only"
+# [1] 2.05
+#           cpg      Beta       SE         Z            P ncase ncontrol   chr
+# 1: cg12829286 -62.86751 14.83352 -4.238207 2.253123e-05    73       47 chr14
+#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
+# 1: 93142201            OpenSea              RIN3        NA               Body
+#    CpG_maf           Regulatory_Feature_Group       fdr bf
+# 1:      NA Gene_Associated_Cell_type_specific 0.2473965  1
+
+####################################
+# pathway analysis 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+for(varName in c("astigm2g_b2","astigm_bg3","astigm_bg3.case.only")){
+
+  model_anno <- fread(paste0(varName,".ewas.annotated.lm.txt")) %>%
+      as.data.frame() %>%
+      arrange(P)
+    
+  raw_100 = model_anno %>%
+      mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+      dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+  raw_100 = raw_100[1:100,]
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  #write_rds(res1,"res1.rds")
+  #res1 = read_rds("res1.rds")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(varName,"_pathways_top_100.csv"))
+}
+
+####################################
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+for(varName in c("astigm2g_b2","astigm_bg3","astigm_bg3.case.only")){
+
+  raw = fread(paste0(varName,".ewas.annotated.lm.txt")) 
+  raw1 = raw %>%
+    as.data.frame() %>%
+    dplyr::rename("probe"="cpg",
+                  "p"="P") %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+  
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(varName,"_region_plot.pdf"))
+  } 
+  
+  if(file.exists("resu_ipdmr.csv")){
+  
+    dmr = read.csv("resu_ipdmr.csv") %>%
+      filter(nprobe>1)
+    
+    unlink("resu_ipdmr.csv") # delete this file
+    
+    comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field="end",
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    
+    if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+    try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+        silent=TRUE)
+    }
+  
+   if(exists("comb_p_GR_DF")){
+
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+    
+    betasAll = raw %>%
+      filter(!is.na(P))%>%
+      dplyr::select(cpg,Beta) %>%
+      left_join(annoEPIC,by=c("cpg"="probe")) %>%
+      arrange(chr,start)%>%
+      na.omit()
+    
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Beta))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    write.csv(dmr_w_beta,paste0(varName,"_annotated_dmr.csv"))
+    rm(comb_p_GR_DF)
+  }}
+}
+
+# Number of identified DMR:  0
+# Number of DMRs identified:   3 
+# Number of DMRs identified:   1 
+
+
+####################################
+###gene look up
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+
+lookup_source_1 = fread("lookup/CREAM.txt",header=FALSE) %>%
+  as.data.frame() %>%
+  distinct(V1,.keep_all=TRUE)
+colnames(lookup_source_1)="Nearest gene"
+lookup_source_1$source="cream"
+
+lookup_source_2 = fread("lookup/WeiJieSeowetal.csv",header=TRUE) %>%
+  as.data.frame() %>%
+  filter(`Nearest gene`!="")
+lookup_source_2$source="weijie"
+
+gene_list = rbind(lookup_source_1,lookup_source_2[c("Nearest gene","source")]) %>% 
+  as.data.frame() %>%
+  dplyr::rename("gene"="Nearest gene")
+
+# write.csv(gene_list,"gene_list.csv")
+
+for(varName in c("astigm2g_b2","astigm_bg3","astigm_bg3.case.only")){
+  
+  results= fread(paste0(varName,".ewas.annotated.lm.txt"))
+  sigones_results = results[1:100,] 
+  
+  genelookup_results = results %>%
+    mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+    filter(gene %in% gene_list$gene) %>%
+    arrange(as.numeric(P)) %>%
+    dplyr::select(-gene)
+  
+  lookuptotal = rbind(sigones_results,genelookup_results) %>%
+    as.data.frame() 
+  
+  write.csv(lookuptotal,paste0("lookup.",varName,".all.races.ewas.lm.csv"))
+  
+}
+
+
+```
+
+```{r Hyperopia, by races}
+
+library(tidyverse)
+library(data.table)
+library(parallel) 
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())%>%
+      filter(is.finite(meth))
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  if ( (exists(class(cf)[1]) == FALSE) | !(mod$converged) |(sum(cf[,"Pr(>|z|)"])==0) ) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+# #linear <- function(meth,cov){
+#   methDF = meth %>% as.numeric()
+#   dat <- data.frame(y = methDF, cov)
+#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+#   mod <- try(lm(ff, data = dat),silent = TRUE)
+#   N <- sum(!is.na(dat[,1]))
+#   if (class(mod)=="lm") {
+#     coefs = summary(mod)$coefficients
+#     coef = coefs[2,"Estimate"]
+#     SE = coefs[2,"Std. Error"]
+#     t.value = coefs[2,"t value"]
+#     p.value = coefs[2,"Pr(>|t|)"]
+#     out = c(coef, SE, t.value, p.value, N) 
+#   } else {
+#     out = c(rep(NA,4), N)
+#   }
+#   names(out) = c("Beta","SE", "t", "P", "N")
+#   return(out) 
+# }
+
+# a = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") 
+# table(a$raceg)
+#   1   2   3   4 
+# 368 172 819  93 
+
+varName="astigm2g_b"
+
+
+for(racenum in 1:4){
+#racenum=4
+#  0  1 
+# 54  7  not enough to converge
+  
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(.data[[varName]]==1 | diseases==0) %>%
+  filter(raceg==racenum) %>%
+  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                epi1,epi2,epi3) %>%
+  column_to_rownames(var="beadPosition") %>%
+  na.omit() 
+
+methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+methyl1 = methyl[,rownames(covs1)]
+
+if(identical(rownames(covs1),colnames(methyl1))==TRUE){
+
+  # methylt = methyl1[which(rownames(methyl1)=='cg00002186'),,drop=FALSE]
+  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
+  # plot(methylt[1,],covs1$hyperopia_b)
+  # dat <- data.frame(meth = methylt[1,], covs1) %>% dplyr::select(one_of(varName),meth,everything())
+  # ff  <- formula(paste(varName," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  # mod <- try(glm(ff, data = dat, family=binomial))
+  # cf = try(summary(mod)$coefficients)
+  
+  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+  results <- as.data.frame(results) %>%
+    na.omit() %>%
+    rownames_to_column(var="cpg")
+  
+  write.table(results,paste0(varName,".race.",racenum,".ewas.lm.txt"),
+        quote=FALSE,
+        row.names = FALSE,
+        sep='\t')  
+}}
+
+stopCluster(cl)
+
+####################################
+####################################
+####################################
+# results annotation
+# module load gcc/11.2.0
+# module load openblas/0.3.18
+# module load r/4.1.2
+
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+
+varName="astigm2g_b"
+
+# DMR and genelook up
+
+for(racenum in 1:4){
+#racenum=3
+
+  annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+  results <- fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+    filter(UCSC_RefGene_Name!="")
+  sigones_results = results[1:100,] 
+  
+  gene_list = read.csv("gene_list.csv")
+  genelookup_results = results %>%
+    mutate(gene = gsub(";.*$","",UCSC_RefGene_Name))%>%
+    filter(gene %in% gene_list$gene) %>%
+    arrange(as.numeric(P)) %>%
+    dplyr::select(-gene)
+  
+  lookuptotal = rbind(sigones_results,genelookup_results) %>%
+    as.data.frame() 
+  
+  write.csv(lookuptotal,paste0("lookup.",varName,".race.",racenum,".ewas.lm.csv"))
+  
+  data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+  annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+    getAnnotation %>%
+    as.data.frame %>%
+    mutate(start=pos,
+           end=pos,
+           probe=Name) %>%
+    dplyr::select(chr,start,end,probe) 
+  
+  raw = fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) 
+  raw1 = raw %>%
+    as.data.frame() %>%
+    dplyr::rename("probe"="cpg",
+                  "p"="P") %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+  
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(varName,"_race",racenum,"_region_plot.pdf"))
+  } 
+  
+  if(file.exists("resu_ipdmr.csv")){
+  
+    dmr = read.csv("resu_ipdmr.csv") %>%
+      filter(nprobe>1)
+    
+    comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field="end",
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    
+    if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+    try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+        silent=TRUE)
+    }
+    
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+    
+    betasAll = raw %>%
+      filter(!is.na(P))%>%
+      dplyr::select(cpg,Beta) %>%
+      left_join(annoEPIC,by=c("cpg"="probe")) %>%
+      arrange(chr,start)%>%
+      na.omit()
+    
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Beta))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    write.csv(dmr_w_beta,paste0(varName,"_race",racenum,"_annotated_dmr.csv"))
+    
+    unlink("resu_ipdmr.csv") # delete this file
+}}
+
+# pathway analysis
+# R 4.0.0
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+varName="astigm2g_b"
+
+for(racenum in 1:4){
+  #racenum=1
+  model_anno <- fread(paste0(varName,".race.",racenum,".ewas.lm.txt")) %>% 
+    dplyr::filter(grepl('cg', cpg)) %>% # 715722
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% #701481
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  # 641965
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    arrange(by=P) %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+  raw_100 = model_anno[1:100,]
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(varName,"_race",racenum,"_pathways_top_100.csv"))
+    
+}
+
+```
+
+```{r Ancestry PCs and their associations with astigmatism}
+
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
+
+varName="astigm2g_b"
+covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+  as.data.frame() %>%
+  filter(!is.na(.data[[varName]]))
+
+rcs = covs1[,c("rc1","rc2","rc3","rc4","rc5","rc6","rc7","rc8","rc9","rc10")]
+rcsCor = apply(rcs,2,function(x){
+        p = cor.test(x,covs1[,varName])$p.value
+        cor =  cor.test(x,covs1[,varName])$estimate
+        names(cor)=c()
+        return(c(cor=cor,p=p))
+        }) %>%
+  t %>%
+  as.data.frame()
+
+write.csv(rcsCor,paste0("cor.rcs.w.",varName,".csv"))
+
+# plot of RC2 and astigasm
+ploR = "rc2"
+covs1 %>%
+  mutate(astigm2g_b = as.factor(astigm2g_b)) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=.data[[varName]], y=.data[[ploR]], fill=.data[[varName]])) +
+    geom_boxplot(outlier.size=0.2)+
+    theme_classic() +
+    ggtitle(paste("Comparisons of RC2 with ",varName))+
+    xlab("Case/control status") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_discrete(name="disease status",labels=c("0","1"))
+ggsave(paste0(varName,"_corr_rc2.png"), width = 8,height = 6)
+
+```

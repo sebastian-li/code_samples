@@ -1,0 +1,443 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: to infer copy number for chromosome 21 with childhood DNA methylation data
+
+```{r create methylset objects from iDAT files}
+
+setwd("/project/wiemels_260/sebastian/sets/set1")
+RGset = read_rds("RGset.rds")
+MSet <- preprocessIllumina(RGset)
+write_rds(MSet,"MSet.rds")
+
+setwd("/project/wiemels_260/sebastian/sets/set2")
+RGset = read_rds("RGset.rds")
+MSet <- preprocessIllumina(RGset)
+write_rds(MSet,"MSet.rds")
+
+setwd("/project/wiemels_260/sebastian/sets/set3")
+RGset = read_rds("RGset.rds")
+MSet <- preprocessIllumina(RGset)
+write_rds(MSet,"MSet.rds")
+
+
+setwd("/project/wiemels_260/sebastian/sets/set4")
+RGset = read_rds("RGset.rds")
+MSet <- preprocessIllumina(RGset)
+write_rds(MSet,"MSet.rds")
+```
+
+```{r copy number analysis for sets 1-4 subjects}
+
+setwd("/project/wiemels_260/sebastian/copynumber")
+
+library(minfi)
+library(minfiData)
+library(data.table)
+library(tidyverse)
+library(conumee)
+
+# normal controls, 3 from minfi data
+#data(MsetEx)
+#minfi.data <- CNV.load(MsetEx)
+#conInd <- pData(MsetEx)$status == "normal"
+#minfi.controls <- minfi.data[conInd]
+
+# normal controls, 100 from Set2 for 450k
+subs = fread(paste0("/project/wiemels_260/sebastian/sets/set2/clinical_variables.csv"))%>%
+  filter(CaCo==0)%>%
+  select(beadPosition)
+ccls_controls = subs$beadPosition[1:100] 
+msetC = read_rds("/project/wiemels_260/sebastian/sets/set2/MSet.rds")
+c_ind = rownames(pData(msetC))%in%ccls_controls
+con.data <- CNV.load(msetC)
+con.ccls <- con.data[c_ind]
+#write_rds(con.ccls,"con.ccls.rds")
+anno <- CNV.create_anno(array_type = "450k")
+
+# normal controls, 100 from Set4 for EPIC
+subsE = fread("/project/wiemels_260/sebastian/sets/set4/clinical_variables.csv")%>%
+  filter(smp_type=="bg")%>%
+  filter(CaCo==0)%>%
+  select(beadPosition)
+ccls_controls.epic = subsE$beadPosition[1:90] 
+msetC.epic = read_rds("/project/wiemels_260/sebastian/sets/set4/MSet.rds")
+c_ind.epic = rownames(pData(msetC.epic))%in%ccls_controls.epic
+con.data.epic <- CNV.load(msetC.epic)
+#Warning message:
+#In CNV.check(object) : intensities are abnormally low (< 5000).
+con.ccls.epic <- con.data.epic[c_ind.epic]
+#write_rds(con.ccls.epic,"con.ccls.epic.rds")
+#con.ccls.epic = read_rds("con.ccls.epic.rds")
+anno.epic <- CNV.create_anno(array_type = "EPIC")
+
+for(set in 1:2){
+  collectChr21 = list()
+  j=1
+  mset = read_rds(paste0("/project/wiemels_260/sebastian/sets/set",set,"/MSet.rds"))
+  set.data <- CNV.load(mset)
+  
+  for(i in names(set.data)){
+  
+    x <- CNV.fit(set.data[i], con.ccls, anno)
+  
+    x <- CNV.bin(x)
+    x <- CNV.segment(x)
+    
+    jpeg(paste0("pics/",i,".cnv.jpeg"),width=1200,height=800)
+    CNV.genomeplot(x)
+    dev.off()
+    
+    df = CNV.write(x, what = "segments") %>% filter(chrom=="chr21")
+    sample=i
+    
+    collectChr21[[j]]=c(sub=i,
+                        chr21.seg.mean = df$seg.mean,
+                        chr21.seg.median = df$seg.median)
+    
+    j=j+1
+    }
+  
+  collectChr21DF = do.call(rbind, collectChr21) %>% as.data.frame()
+  write.csv(collectChr21DF, paste0("set",set,".cnv.chr21.outputs.csv"))
+}
+
+for(set in 3:4){
+  collectChr21 = list()
+  j=1
+  mset = read_rds(paste0("/project/wiemels_260/sebastian/sets/set",set,"/MSet.rds"))
+  set.data <- CNV.load(mset)
+  
+  mset <- mapToGenome(mset)
+  anno.epic@probes <- subsetByOverlaps(anno.epic@probes, granges(mset))
+  
+  for(i in names(set.data)){
+  
+    x <- CNV.fit(set.data[i], con.ccls.epic, anno.epic)
+  
+    x <- CNV.bin(x)
+    x <- CNV.segment(x)
+    
+    #jpeg(paste0("pics/",i,".cnv.jpeg"),width=1200,height=800)
+    #CNV.genomeplot(x)
+    #dev.off()
+    
+    df = CNV.write(x, what = "segments") %>% filter(chrom=="chr21")
+    sample=i
+    
+    collectChr21[[j]]=c(sub=i,
+                        chr21.seg.mean = mean(df$seg.mean))
+    
+    j=j+1
+    
+    }
+  
+  collectChr21DF = do.call(rbind, collectChr21) %>% as.data.frame()
+  write.csv(collectChr21DF, paste0("set",set,".cnv.chr21.outputs.csv"))
+}
+
+
+
+```
+
+```{r visualizing results and update the results}
+
+setwd("/scratch/lishaobo/copynumber")
+
+library(data.table)
+library(tidyverse)
+
+set=2 #1,2
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  select(beadPosition,sex,CaCo)
+
+outputs = fread(paste0("set",set,".cnv.chr21.outputs.csv"))%>%
+  select(sub, chr21.seg.mean1, chr21.seg.mean2)%>%
+  rename("chr21.seg.mean"="chr21.seg.mean1",
+         "chr21.seg.median"="chr21.seg.mean2",
+         "beadPosition"="sub")%>%
+  arrange(desc(chr21.seg.mean)) %>%
+  left_join(clinical, by="beadPosition")%>%
+  na.omit()
+
+a = outputs %>% filter(chr21.seg.mean>0.05 & chr21.seg.median > 0.05) %>% select(beadPosition)
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"))%>%
+  select(-V1)
+ind = which(clinical$beadPosition%in%a$beadPosition)
+clinical$Trisomy21.cnm = 0
+clinical$Trisomy21.cnm[ind]=1
+write.csv(clinical,paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"),
+          row.names=FALSE) 
+
+set=3
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(subjectId=as.character(subjectId))%>%
+  select(subjectId,sex,CaCo,Trisomy21)
+
+outputs = fread(paste0("set",set,".cnv.chr21.outputs.csv"))%>%
+  select(sub, chr21.seg.mean1, chr21.seg.mean2)%>%
+  rename("chr21.seg.mean"="chr21.seg.mean1",
+         "chr21.seg.median"="chr21.seg.mean2",
+         "subjectId"="sub")%>%
+  arrange(desc(chr21.seg.mean)) %>%
+  left_join(clinical, by="subjectId")%>%
+  na.omit()
+
+a = outputs %>% filter(chr21.seg.mean>0.05 & chr21.seg.median > 0.05)
+table(a$Trisomy21)
+a %>% filter(Trisomy21==0)
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"))%>%
+  select(-V1)
+ind = which(clinical$subjectId%in%a$subjectId)
+clinical$Trisomy21.cnm = 0
+clinical$Trisomy21.cnm[ind]=1
+write.csv(clinical,paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"),
+          row.names=FALSE) 
+
+
+set=4
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(subjectId=as.character(Sample_Name))%>%
+  filter(smp_type=="bg")%>%
+  select(subjectId,sex,CaCo)
+
+outputs = fread(paste0("set",set,".cnv.chr21.outputs.csv"))%>%
+  select(sub, chr21.seg.mean1, chr21.seg.mean2)%>%
+  rename("chr21.seg.mean"="chr21.seg.mean1",
+         "chr21.seg.median"="chr21.seg.mean2",
+         "subjectId"="sub")%>%
+  arrange(desc(chr21.seg.mean)) %>%
+  left_join(clinical, by="subjectId")%>%
+  na.omit()
+
+a = outputs %>% filter(chr21.seg.mean>0.05 & chr21.seg.median > 0.05)
+a = a %>%
+  filter(CaCo==1)%>%
+  filter(!subjectId %in%c(159652,159726,159653,162440,163812))
+
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"))%>%
+  select(-V1)
+ind = which(clinical$Sample_Name%in%a$subjectId)
+clinical$Trisomy21.cnm = 0
+clinical$Trisomy21.cnm[ind]=1
+write.csv(clinical,paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv"),
+          row.names=FALSE) 
+
+```
+
+```{r what's wrong with the subjects that are messy}
+
+setwd("/scratch/lishaobo/copynumber")
+
+library(data.table)
+library(tidyverse)
+
+weird = c("87772",
+          "87745",
+          "87939",
+          "87821",
+          "88619",
+          "99604",
+          "122646")
+
+up= c("87753",
+      "159639",
+      "159652",
+      "159653",
+      "159711",
+      "159726",
+      "159797",
+      "159821",
+      "159836",
+      "159873",
+      "161028",
+      "162433",
+      "162440",
+      "198056",
+      "198149",
+      "198203",
+      "198268",
+      "198341",
+      "724984",
+      "6057833073_R04C01.cnv",
+      "9702496023_R01C02.cnv")
+
+down = c("6057833067_R04C01",
+        "6057833067_R04C02",
+        "6057833068_R03C02",
+        "6057833068_R06C01",
+        "6057833069_R01C02",
+        "6057833069_R05C02",
+        "6057833078_R02C02",
+        "6057833078_R03C02",
+        "6057833078_R05C01",
+        "6057833078_R05C02",
+        "6057833080_R05C02",
+        "6057833143_R01C01",
+        "6057833143_R03C01",
+        "6057833143_R04C01",
+        "6057833143_R05C01",
+        "6057833167_R04C01",
+        "6057833167_R04C02",
+        "6057833167_R05C01")
+
+both = c("88632",
+        "161584",
+        "161585",
+        "161586",
+        "161588",
+        "161589",
+        "161590",
+        "161592",
+        "198124",
+        "6042308151_R01C01",
+        "6042316005_R05C01",
+        "6042316005_R05C02",
+        "6042316016_R02C01",
+        "6042324015_R06C02",
+        "6042324083_R06C01",
+        "6057833016_R01C01",
+        "6057833016_R06C01",
+        "6057833025_R02C02",
+        "6057833030_R02C02",
+        "6057833034_R06C01",
+        "6057833044_R04C02",
+        "6057833055_R02C01",
+        "6057833102_R01C02",
+        "6057833115_R05C01",
+        "6057833127_R01C01",
+        "9702496074_R01C02",
+        "9761749095_R05C01")
+
+
+up_df = data.frame(sub=up, direction="up")
+down_df = data.frame(sub=down, direction="down")
+both_df = data.frame(sub=both, direction="both")
+weird_df = data.frame(sub=weird, direction="weird")
+
+allSubs = rbind(up_df,down_df,both_df,weird_df) %>% as.data.frame()
+
+set=1
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(sub=beadPosition)%>%
+  inner_join(allSubs, by="sub")%>%
+  select(sub,beadPosition,sex,CaCo,plate,race,direction,ch_ageref)
+
+set=2
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(sub=beadPosition)%>%
+  inner_join(allSubs, by="sub")%>%
+  select(sub,beadPosition,sex,CaCo,plate,race,direction,ch_ageref)
+
+set=3
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(sub=as.character(subjectId))%>%
+  inner_join(allSubs, by="sub")%>%
+  select(sub,beadPosition,sex,CaCo,plate,race,Trisomy21)
+
+set=4
+clinical = fread(paste0("/project/wiemels_260/sebastian/sets/set",set,"/clinical_variables.csv")) %>%
+  mutate(sub=as.character(Sample_Name))%>%
+  inner_join(allSubs, by="sub")%>%
+  select(sub,beadPosition,sex,CaCo,plate,race,smp_type)
+
+
+```
+
+
+```{r keren paper reviewer 1 (epigenetic aging)}
+
+library(tidyverse)
+library(conumee)
+setwd("/project/wiemels_260/sebastian/copynumber")
+
+data(exclude_regions)
+data(detail_regions)
+
+#create anno
+anno_cnv <- CNV.create_anno(array_type = "EPIC", exclude_regions = exclude_regions)
+anno_cnv@bins@ranges
+
+mSetSq = read_rds("/project/wiemels_260/sebastian/sets/set3/MSet.rds")
+Mset <- mapToGenome(mSetSq)
+anno_cnv@probes <- subsetByOverlaps(anno_cnv@probes, granges(Mset))
+rm(Mset)
+
+mSetSq_CNV <- CNV.load(mSetSq)
+outcomes <- read_rds("/project/wiemels_260/publicRaws/downSyndrome/methylation/rawTables/outcomes_final_08_08.rdata")%>%
+  as.data.frame()
+
+outcomes_non_down<- outcomes%>%
+  dplyr::filter(down_syndrome_pheno==0)
+
+set_3_non_down <- pData(mSetSq)$array_pos%in%outcomes_non_down$ID
+mSetSq_CNV_controls <- mSetSq_CNV[set_3_non_down]
+mSetSq_CNV_controls <- mSetSq_CNV_controls[1:20]
+#mSetSq_CNV_DS <- mSetSq_CNV[!set_3_non_down]
+
+all_data <- data.frame(cbind(rownames(colData(mSetSq)), mSetSq@colData@listData[["Subject.ID"]]))
+names(all_data) <- c("ID", "ID_raw")
+count <-0
+bins <- NULL
+for (n in names(mSetSq_CNV)){
+  FIT <- CNV.fit(mSetSq_CNV[n], mSetSq_CNV_controls, anno_cnv)
+  FIT <- CNV.segment(CNV.detail(CNV.bin(FIT)))
+  bin <- data.frame(FIT@bin[["ratio"]])
+  bin[,n] <- bin
+  bin <- bin%>%
+    dplyr::select(n)
+  bins <- bind_cols(bins,bin)
+  count <- count+1
+  print(count)
+}
+write_rds(bins, "/project/wiemels_260/publicDataShare/forKeren/0330/for_keren_set3_cnv_bins.rds")
+
+# draw some pictures
+# beadPosition,subjectId,peri_dsal,sex,CaCo,Ethnicity,CNV_mean_chr21
+# 202172220132_R07C01,724984,peri,1,0,Hispanic,0.421829906470432
+# 202060330090_R02C01,198433,dsal,2,1,Hispanic,0.0780544142064763
+# 202148010085_R03C01,198233,dsal,1,1,Hispanic,-0.00395796345980645
+# 202148010094_R05C01,198021,dsal,1,1,Hispanic,0.139674149356685
+# 202172220189_R02C01,198031,dsal,2,0,White,0.108393164265252
+# 202229250145_R05C01,198035,dsal,2,1,Hispanic,0.184158850717446
+# 202229250198_R05C01,198501,dsal,1,0,Hispanic,0.0915000520832217
+
+OUTLIERS=c("198029","198443")
+
+  for(n in OUTLIERS){
+  
+    FIT <- CNV.fit(mSetSq_CNV[n], mSetSq_CNV_controls, anno_cnv)
+    FIT <- CNV.bin(FIT)
+    FIT <- CNV.segment(FIT)
+    
+    jpeg(paste0("/project/wiemels_260/publicDataShare/forKeren/0406/",n,".cnv.jpeg"),width=1200,height=800)
+    CNV.genomeplot(FIT)
+    dev.off()
+
+    }
+
+
+########################################################################
+# zoomed in chr21
+n = '198233'
+FIT <- CNV.fit(mSetSq_CNV[n], mSetSq_CNV_controls, anno_cnv)
+FIT <- CNV.segment(CNV.detail(CNV.bin(FIT)))
+
+jpeg(paste0("/project/wiemels_260/publicDataShare/forKeren/0330/",n,".cnv.chr21.jpeg"),width=1200,height=800)
+#jpeg(paste0(n,".cnv.chr21.jpeg"),width=1200,height=800)
+CNV.genomeplot(FIT,chr='chr21')
+dev.off()
+
+write_rds(FIT,paste0("/project/wiemels_260/publicDataShare/forKeren/0330/",n,".cnv.sourceFile.chr21.rds"))
+#FIT = read_rds(paste0("/project/wiemels_260/publicDataShare/forKeren/0330/",n,".cnv.sourceFile.chr21.rds"))
+
+
+```

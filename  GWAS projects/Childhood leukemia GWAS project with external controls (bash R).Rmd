@@ -1,0 +1,414 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: a GWAS study of childhood leukemia, adding external dbGAP controls to boost power
+
+```{r generating sub IDs of subtypes}
+
+setwd("/ccls/home/sli/GWAS/libby/cclsdbGAP_subtype")
+library(tidyverse)
+library(data.table)
+
+subtypes <- fread("/ccls/home/sli/GWAS/libby/clinical/sebastian_ccls_pheno.csv") %>%
+  filter( (hyperdiploid_51to67_final == 1) | (t1221_final ==1 )) %>%
+  mutate(subtype=ifelse(hyperdiploid_51to67_final==1,"hyperdiploid",subtype),
+         subtype=ifelse(t1221_final==1,"telaml",subtype)) %>%
+  mutate(vcf_iid = paste0(FID,"_",IID),
+         vcf_fid = 0) 
+
+hyperdi_df = subtypes %>%
+  filter(subtype == "hyperdiploid" ) %>%
+  select(vcf_fid,vcf_iid)
+
+telaml_df = subtypes %>%
+  filter(subtype == "telaml" ) %>%
+  select(vcf_fid,vcf_iid)
+
+con_subs_eur = fread("/ccls/home/sli/GWAS/libby/cclsdbGAP/ccls.eur.fam") %>%
+  filter(V6==1) %>%
+  mutate(vcf_fid = V1,
+         vcf_iid = V2) %>%
+ select(vcf_fid,vcf_iid)
+
+con_subs_lat = fread("/ccls/home/sli/GWAS/libby/cclsdbGAP/ccls.lat.fam") %>%
+  filter(V6==1) %>%
+  mutate(vcf_fid = V1,
+         vcf_iid = V2) %>%
+ select(vcf_fid,vcf_iid)
+
+
+hyperdi = rbind(hyperdi_df,con_subs_eur,con_subs_lat) %>% as.data.frame()
+telaml = rbind(telaml_df,con_subs_eur,con_subs_lat) %>% as.data.frame()
+
+write.table(hyperdi, "hyperdiploid.ids", col.names = FALSE, row.names = FALSE, quote=FALSE)
+write.table(telaml, "telaml.ids", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+```
+
+
+```{bash choose subtype from eur and lat}
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP_subtype
+
+for race in "eur" "lat";do
+  for sub in "hyperdiploid" "telaml";do
+    plink --bfile /ccls/home/sli/GWAS/libby/cclsdbGAP/ccls.$race\
+      --keep $sub.ids\
+      --make-bed\
+      --out $race.$sub.ccls
+  done
+done
+
+# eur.hyperdiploid: 89 are cases and 5682 are controls
+# eur.telaml: 57 are cases and 5682 are controls
+# lat.hyperdiploid: 184 are cases and 1868 are controls
+# lat.telaml: 93 are cases and 1868 are controls
+
+```
+
+# run caco analysis
+
+```{bash run caco analysis}
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP_subtype
+
+for race in "eur" "lat"; do
+  for sub in "hyperdiploid" "telaml";do
+
+    # HWE among controls using keep if
+    plink2 --bfile $race.$sub.ccls\
+      --hwe midp 1e-4\
+      --keep-if PHENO1 == control\
+      --make-bed\
+      --out tmp/$race.$sub.ccls_1\
+      --threads 200
+  
+    # Make bed again using remaining variants
+    plink2 --bfile $race.$sub.ccls\
+      --make-bed\
+      --extract tmp/$race.$sub.ccls_1.bim\
+      --out $race.$sub.gwas\
+      --threads 200
+  
+    #make bed for PCA analysis
+    # Create pruned SNPs for later use as controlling variables in regression
+    plink2 --bfile $race.$sub.gwas\
+      --maf 0.1\
+      --indep-pairwise 50 10 0.1\
+      --out tmp/$race.$sub.pruned
+    
+    plink2 --bfile $race.$sub.gwas\
+      --extract tmp/$race.$sub.pruned.prune.in\
+      --pca 20\
+      --out $race.$sub.gwas.pruned.pca\
+      --threads 200
+  
+    # Regression
+    plink2 --bfile $race.$sub.gwas\
+      --covar $race.$sub.gwas.pruned.pca.eigenvec\
+      --threads 200\
+      --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+      --out $race.$sub
+    
+  done  
+done
+
+```
+
+Too many NA results because of the imbalance between case and control numbers.
+
+```{bash META analysis of Plink results}
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP
+
+  metal
+  MARKER ID
+  EFFECT BETA
+  PVALUE P
+  SCHEME STDERR
+  STDERR SE
+  ALLELELABELS REF ALT1
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS ccls.eur.PHENO1.glm.logistics
+  PROCESS ccls.lat.PHENO1.glm.logistic
+  PROCESS ccls.afr.PHENO1.glm.logistic
+  PROCESS ccls.eas.PHENO1.glm.logistic
+  ANALYZE HETEROGENEITY
+  QUIT
+  
+  mv METAANALYSIS1.TBL overall.meta.ccls.glm.TBL
+  mv METAANALYSIS1.TBL.info overall.meta.ccls.glm.TBL.info
+
+
+# filter meta results. SNPs have to appear in at least 2 datasets
+wc -l overall.meta.ccls.glm.TBL
+# 14073647 overall.meta.ccls.glm.TBL
+
+grep -E -v "[+-]\?\?\?|\?[+-]\?\?|\?\?[+-]\?|\?\?\?[+-]" overall.meta.ccls.glm.TBL > flted.meta.ccls.glm.TBL
+# 7946781
+
+# check sig results
+awk '$6<5E-8 {print}' flted.meta.ccls.glm.TBL > meta.sigs
+
+```
+
+
+
+```{bash exporting data for Soyong}
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP
+
+# 1. 20 PC and phenotype of all samples
+
+# ccls.gwas.eur.20pcs.eigenvec
+# ccls.gwas.lat.20pcs.eigenvec
+
+awk '{print $1,$2,$6}'  ccls.eur.fam > eur.phenotype.sy
+awk '{print $1,$2,$6}'  ccls.lat.fam > lat.phenotype.sy
+
+# 2. SNPtest GWAS output. I think you can just send genome-wide results if that's small enough. If not, let me know so I can send ~150 SNPs I need result for. 
+
+# 3. Genotypes from SNPs below. 
+# nano syOutput.txt
+
+for race in "eur" "lat"; do
+  for chr in 5 6 7 8 9 10 12 14 17 21; do
+    vcftools --gzvcf /ccls/home/sli/GWAS/libby/cclsdbGAP/michigan_imputed/$race/chr"${chr}".dose.vcf.gz\
+    --positions syOutput.txt\
+    --recode --stdout | gzip -c > sy.$race.chr$chr.vcf.gz
+  done
+done  
+
+
+```
+
+
+```{bash GWAS trial run for CCLS CACO with SNPTEST}
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP
+
+mkdir snptest
+mkdir snptest/eur
+mkdir snptest/lat
+mkdir snptest/afr
+mkdir snptest/eas
+mkdir snptest/eur/plinkPCA
+mkdir snptest/lat/plinkPCA
+mkdir snptest/afr/plinkPCA
+mkdir snptest/eas/plinkPCA
+
+for race in "eur" "lat" "afr" "eas"; do
+  for chr in {1..22};do
+    awk '($7 < 0.3) {print $1}' <(zcat michigan_imputed/$race/chr"${chr}".info.gz) | sed '1d' > \
+        michigan_imputed/$race/exclude.03.chr"${chr}".txt
+  done
+done
+
+for race in "eur" "lat" "afr" "eas"; do
+
+  for chr in {1..22};do
+    vcftools --gzvcf michigan_imputed/$race/chr"${chr}".dose.vcf.gz\
+      --maf 0.01\
+      --exclude michigan_imputed/$race/exclude.03.chr"${chr}".txt\
+      --recode --stdout | gzip -c \
+      > snptest/$race/$race.chr"${chr}".snptest.vcf.gz
+  done
+  
+  bcftools query -l snptest/$race/$race.chr22.snptest.vcf.gz > snptest/$race/samples.list.ids
+done
+
+for race in "eur" "lat" "afr" "eas"; do
+  for chr in {1..22};do
+    plink --vcf snptest/$race/$race.chr"${chr}".snptest.vcf.gz\
+    --double-id\
+    --make-bed\
+    --out snptest/$race/plinkPCA/$race.chr"${chr}"
+  done
+done
+
+for race in "eur" "lat" "afr" "eas"; do
+  find ./snptest/$race/plinkPCA -name "$race.chr*.bim" > \
+  ./snptest/$race/plinkPCA/merge.$race.snptest.list 
+  
+  sed -i 's/.bim//g' snptest/$race/plinkPCA/merge.$race.snptest.list
+  
+  plink --merge-list snptest/$race/plinkPCA/merge.$race.snptest.list\
+    --make-bed\
+    --out snptest/$race/plinkPCA/$race.snptest.pca
+  
+  plink2 --bfile snptest/$race/plinkPCA/$race.snptest.pca \
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out snptest/$race/plinkPCA/$race.snptest
+  
+  plink2 --bfile snptest/$race/plinkPCA/$race.snptest.pca \
+    --extract snptest/$race/plinkPCA/$race.snptest.prune.in\
+    --pca 10 \
+    --out snptest/$race/$race.snptest\
+    --threads 200
+done
+
+```
+
+```{r generate covariate data}
+
+setwd("/ccls/home/sli/GWAS/libby/cclsdbGAP/snptest")
+library(tidyverse)
+library(data.table)
+library(R.utils)
+
+for(race in c("eur","lat","afr","eas")){
+
+  pheno = fread(gstring("/ccls/home/sli/GWAS/libby/cclsdbGAP/${race}/${race}.ahgwas.ccls.fam")) %>%
+    mutate(subjectID=paste0(V1,"_",V2),caco=V6)%>%
+    select(subjectID,caco)
+  
+  PCs <- fread(gstring("${race}/${race}.snptest.eigenvec")) %>%
+    select(-1) %>%
+    rename( subjectID = IID )
+  
+  samples <- read.table(gstring("${race}/samples.list.ids"))
+  colnames(samples) <- "subjectID"
+  
+  samples_cov <- samples %>%
+    left_join(pheno,by="subjectID") %>%
+    left_join(PCs,by="subjectID") %>%
+    rename(ID = subjectID) %>%
+    mutate(caco = ifelse(caco==1,0,1))
+  line2 <- c(0,"B",rep("C",10))
+  samples_cov_1 <- rbind(line2, samples_cov) %>% as.data.frame()
+  
+  samples_cov_2 <- samples %>%
+    left_join(pheno,by="subjectID") %>%
+    left_join(PCs,by="subjectID") %>%
+    rename(ID = subjectID) %>%
+    mutate(caco = ifelse(caco==1,0,1))
+  line2_2 <- c(0,"B",rep("C",10))
+  samples_cov_2_1 <- rbind(line2_2, samples_cov_2) %>% as.data.frame()
+  
+  write.table(samples_cov_1, gstring("${race}/eur.snptest.vars.txt") , row.names = FALSE, quote=FALSE)
+
+  }
+
+```
+
+```{bash snptest of ccls cases and controls }
+
+cd /ccls/home/sli/GWAS/libby/cclsdbGAP
+
+for race in "eur" "lat" "afr" "eas"; do
+  for chr in {1..22};do
+    snptest -data snptest/$race/$race.chr"${chr}".snptest.vcf.gz\
+      snptest/$race/$race.snptest.vars.txt\
+      -genotype_field GP\
+      -method expected\
+      -frequentist 1\
+      -pheno caco\
+      -cov_names PC1 PC2 PC3 PC4 PC5 PC6 PC7 PC8 PC9 PC10\
+      -hwe\
+      -o snptest/$race/$race.chr"${chr}".out
+    done
+done
+
+for race in "eur" "lat" "afr" "eas"; do
+  head -1 snptest/$race/$race.chr1.out > snptest/$race/overall.$race.snptest
+  tail -n +2 -q snptest/$race/$race.chr*.out >> snptest/$race/overall.$race.snptest
+done
+
+```
+
+```{r visualization}
+
+setwd("/ccls/home/sli/GWAS/libby/cclsdbGAP")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("ccls.eur.PHENO1.glm.logistic",
+         "ccls.lat.PHENO1.glm.logistic",
+         "ccls.afr.PHENO1.glm.logistic",
+         "ccls.eas.PHENO1.glm.logistic",
+         "flted.meta.ccls.glm.TBL")
+
+for(i in files){
+
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) %>% na.omit()
+
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(gsub("chr","",as.character(CHROM))),POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.numeric(as.character(`#CHROM`)), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]
+
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID")
+  dev.off()
+
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P)
+  dev.off()
+}
+
+#[1] "lambda value of ccls.eur.PHENO1.glm.logistic is: 1.05082028052444"
+#[1] "lambda value of ccls.lat.PHENO1.glm.logistic is: 1.03556545507778"
+#[1] "lambda value of ccls.afr.PHENO1.glm.logistic is: 0.879342726486864"
+#[1] "lambda value of ccls.eas.PHENO1.glm.logistic is: 0.975264496349801"
+#[1] "lambda value of overall.meta.ccls.glm.TBL is: 0.911964461542981"
+#
+
+## visualization of snp.test results
+
+setwd("/ccls/home/sli/GWAS/libby/cclsdbGAP/snptest")
+
+files =c("eur/overall.eur.snptest",
+         "lat/overall.lat.snptest",
+         "afr/overall.afr.snptest",
+         "eas/overall.eas.snptest")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  
+  gwas <- fread(i, skip=13,fill=TRUE)
+  gwas_1 <- gwas %>%
+    select(rsid, chromosome, position, frequentist_add_pvalue) %>%
+    mutate(chromosome = as.numeric(chromosome), position = as.numeric(position), frequentist_add_pvalue = as.numeric(frequentist_add_pvalue)) %>%
+    na.omit()
+  
+  gwas_data_1 <- gwas_1[is.finite(gwas_1$frequentist_add_pvalue),  ]
+  
+  lambda <- P_lambda(gwas_data_1$frequentist_add_pvalue)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "chromosome", bp = "position", p = "frequentist_add_pvalue", snp = "rsid")
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$frequentist_add_pvalue)
+  dev.off()
+
+}
+
+
+```
+
+
+

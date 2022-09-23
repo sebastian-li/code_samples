@@ -1,0 +1,367 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: GWAS analysis of the association between SNPs and immature B cell proportions
+
+```{r create a master file for all subject's information}
+library(tidyverse)
+library(data.table)
+setwd("/ccls/home/sli/GWAS/bcells3")
+
+## Set 1 fam files and IDs
+
+sub1 <- read.csv("/ccls/home/sli/sets/set1/clinical_variables.csv") %>%
+  select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  filter(race%in%c(1,3))%>%
+  select(-CaCo) %>%
+  mutate(set = 1)
+
+phenotype1 <- read_rds("~/sets/set1/bs3_nrbc_cellproportion.rds") %>%
+  as.data.frame() %>%
+  select(beadPosition,Bcell_s3) %>%
+  inner_join(sub1, by = "beadPosition") %>%
+  select(-beadPosition) 
+
+gen1 <- fread("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set1.fam") %>%
+  inner_join(phenotype1,by=c("V2"="subjectId")) %>%
+  mutate(t_Bcell_s3 = log2(100*Bcell_s3+1))%>%
+  select(V1, V2, V3, V4, sex, t_Bcell_s3,race)
+  
+gen1.eur = gen1 %>% filter(race==1) %>% select(-race)
+gen1.eur.id = gen1.eur %>% select(V1,V2)
+
+gen1.lat = gen1 %>% filter(race==3) %>% select(-race)
+gen1.lat.id = gen1.lat %>% select(V1,V2)
+
+
+write.table(gen1.eur, "set1.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen1.eur.id, "set1.eur.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen1.lat, "set1.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen1.lat.id, "set1.lat.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+## Set 2 fam files and IDs
+
+sub2 <- read.csv("/ccls/home/sli/sets/set2/clinical_variables.csv") %>%
+  select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  filter(race%in%c(1,3))%>%
+  select(-CaCo) %>%
+  mutate(set = 2)
+
+phenotype2 <- read_rds("~/sets/set2/bs3_nrbc_cellproportion.rds") %>%
+  as.data.frame() %>%
+  select(beadPosition,Bcell_s3) %>%
+  inner_join(sub2, by = "beadPosition") %>%
+  select(-beadPosition) 
+
+gen2 <- fread("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set2.fam") %>%
+  inner_join(phenotype2,by=c("V2"="subjectId")) %>%
+  mutate(t_Bcell_s3 = log2(100*Bcell_s3+1))%>%
+  select(V1, V2, V3, V4, sex, t_Bcell_s3,race)
+  
+gen2.eur = gen2 %>% filter(race==1) %>% select(-race)
+gen2.eur.id = gen2.eur %>% select(V1,V2)
+
+gen2.lat = gen2 %>% filter(race==3) %>% select(-race)
+gen2.lat.id = gen2.lat %>% select(V1,V2)
+
+
+write.table(gen2.eur, "set2.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen2.eur.id, "set2.eur.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen2.lat, "set2.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen2.lat.id, "set2.lat.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+## Set 3 fam files and IDs
+
+sub3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0) %>%
+  select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  filter(race%in%c(1,3))%>%
+  select(-CaCo) %>%
+  mutate(set = 3)
+
+phenotype3 <- read_rds("~/sets/set3/bs3_nrbc_cellproportion.rds") %>%
+  as.data.frame() %>%
+  select(beadPosition,Bcell_s3) %>%
+  inner_join(sub3, by = "beadPosition") %>%
+  select(-beadPosition) 
+
+gen3 <- fread("~/sets/set3/genetics/ccls.set3.hg38.fam") %>%
+  inner_join(phenotype3,by=c("V2"="subjectId")) %>%
+  mutate(t_Bcell_s3 = log2(100*Bcell_s3+1))%>%
+  select(V1, V2, V3, V4, sex, t_Bcell_s3,race)
+  
+gen3.eur = gen3 %>% filter(race==1) %>% select(-race)
+gen3.eur.id = gen3.eur %>% select(V1,V2)
+
+gen3.lat = gen3 %>% filter(race==3) %>% select(-race)
+gen3.lat.id = gen3.lat %>% select(V1,V2)
+
+
+write.table(gen3.eur, "set3.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen3.eur.id, "set3.eur.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen3.lat, "set3.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen3.lat.id, "set3.lat.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+## Set 4 fam files and IDs
+
+sub4 <- read.csv("/ccls/home/sli/sets/set4/clinical_variables.csv") %>%
+  filter(smp_type == "bg") %>%
+  distinct(subjectId,.keep_all=TRUE) %>%
+  select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  filter(race%in%c(1,3))%>%
+  select(-CaCo) %>%
+  mutate(set = 4)
+
+phenotype4 <- read_rds("~/sets/set4/bs3_nrbc_cellproportion.rds") %>%
+  as.data.frame() %>%
+  select(beadPosition,Bcell_s3) %>%
+  inner_join(sub4, by = "beadPosition") %>%
+  select(-beadPosition) 
+
+gen4 <- fread("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.fam") %>%
+  inner_join(phenotype4,by=c("V2"="subjectId")) %>%
+  mutate(t_Bcell_s3 = log2(100*Bcell_s3+1))%>%
+  select(V1, V2, V3, V4, sex, t_Bcell_s3,race)
+  
+gen4.eur = gen4 %>% filter(race==1) %>% select(-race)
+gen4.eur.id = gen4.eur %>% select(V1,V2)
+
+gen4.lat = gen4 %>% filter(race==3) %>% select(-race)
+gen4.lat.id = gen4.lat %>% select(V1,V2)
+
+
+write.table(gen4.eur, "set4.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen4.eur.id, "set4.eur.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen4.lat, "set4.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen4.lat.id, "set4.lat.id.txt" , sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+```{r visualizing of B_3 cell distribution}
+
+library(tidyverse)
+library(data.table)
+
+setwd("/ccls/home/sli/GWAS/bcells3")
+  
+for (SET in c("set1","set2","set3","set4")){
+  for (RACE in c("eur","lat")){
+
+  bcell <- read.table(paste0(SET,".",RACE,".fam")) 
+  
+  bcell %>%
+    select(V6) %>%
+    na.omit() %>%
+    ggplot(aes(x=V6)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle(paste0("Distribution of transformed B cell proportions in ", SET, " of " ,RACE))+
+    xlab("Transformed B cell proportions") +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.text.x = element_blank()) 
+  ggsave(paste0("becell.s3.DST",SET,RACE,".png"),width = 5,height = 5)}
+  
+  }
+
+```
+
+```{bash B_s3 cell GWAS analysis}
+
+cd /ccls/home/sli/GWAS/bcells3
+
+for set in "set1" "set2" "set4"; do
+  for race in "eur" "lat"; do
+    plink2 --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.$set\
+      --keep $set.$race.id.txt\
+      --make-bed\
+      --out ccls.$set.$race
+   mv ccls.$set.$race.fam ccls.$set.$race.fam.backup
+   cp $set.$race.fam ccls.$set.$race.fam
+  done
+done
+
+set="set3"  
+for race in "eur" "lat"; do
+  plink2 --bfile ~/sets/set3/genetics/ccls.$set.hg38\
+    --keep $set.$race.id.txt\
+    --make-bed\
+    --out ccls.$set.$race
+ mv ccls.$set.$race.fam ccls.$set.$race.fam.backup
+ cp $set.$race.fam ccls.$set.$race.fam
+done
+
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "eur" "lat"; do
+    plink2 --bfile ccls.$set.$race\
+    --maf 0.1\
+    --indep-pairwise 50 10 0.1\
+    --out temp/ccls."${set}"."${race}"
+
+    plink2 --bfile ccls.$set.$race\
+    --extract temp/ccls."${set}"."${race}".prune.in\
+    --pca 10\
+    --out temp/ccls."${set}"."${race}".pca\
+    --threads 200
+
+    plink2 --bfile ccls.$set.$race\
+    --covar temp/ccls."${set}"."${race}".pca.eigenvec\
+    --threads 200\
+    --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+    --out ccls."${set}"."${race}".bcell.s3
+  done
+done
+
+# step 10.1.2 Meta-analysis
+cd /ccls/home/sli/GWAS/bcells3
+
+  metal
+  MARKER ID
+  EFFECT BETA
+  PVALUE P
+  SCHEME STDERR
+  STDERR SE
+  ALLELELABELS REF ALT1
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS ccls.set1.eur.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set2.eur.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set3.eur.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set4.eur.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set1.lat.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set2.lat.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set3.lat.bcell.s3.PHENO1.glm.linear
+  PROCESS ccls.set4.lat.bcell.s3.PHENO1.glm.linear
+  ANALYZE HETEROGENEITY
+  QUIT
+  
+  mv METAANALYSIS1.TBL meta.ccls.bcell.s3.TBL
+  mv METAANALYSIS1.TBL.info ccls.bcell.s3.TBL.info
+
+```  
+
+```{r visualization}
+setwd("/ccls/home/sli/GWAS/bcells3")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("ccls.set1.eur.bcell.s3.PHENO1.glm.linear",
+         "ccls.set2.eur.bcell.s3.PHENO1.glm.linear",
+         "ccls.set3.eur.bcell.s3.PHENO1.glm.linear",
+         "ccls.set4.eur.bcell.s3.PHENO1.glm.linear",
+         "ccls.set1.lat.bcell.s3.PHENO1.glm.linear",
+         "ccls.set2.lat.bcell.s3.PHENO1.glm.linear",
+         "ccls.set3.lat.bcell.s3.PHENO1.glm.linear",
+         "ccls.set4.lat.bcell.s3.PHENO1.glm.linear",
+         "meta.ccls.bcell.s3.TBL")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) %>% na.omit()
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(gsub("chr","",as.character(CHROM))),POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.numeric(as.character(`#CHROM`)), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID")
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P)
+  dev.off()
+}
+# 
+# [1] "lambda value of ccls.set1.eur.bcell.s3.PHENO1.glm.linear is: 0.937958499886039"
+# [1] "lambda value of ccls.set2.eur.bcell.s3.PHENO1.glm.linear is: 0.949116810994538"
+# [1] "lambda value of ccls.set3.eur.bcell.s3.PHENO1.glm.linear is: 0.898592314536442"
+# [1] "lambda value of ccls.set4.eur.bcell.s3.PHENO1.glm.linear is: 0.980548262686054"
+# [1] "lambda value of ccls.set1.lat.bcell.s3.PHENO1.glm.linear is: 0.965690886452974"
+# [1] "lambda value of ccls.set2.lat.bcell.s3.PHENO1.glm.linear is: 0.96419958683929"
+# [1] "lambda value of ccls.set3.lat.bcell.s3.PHENO1.glm.linear is: 0.833607935354259"
+# [1] "lambda value of ccls.set4.lat.bcell.s3.PHENO1.glm.linear is: 0.996056280322282"
+# [1] "lambda value of meta.ccls.bcell.s3.TBL is: 0.909782751185415"
+
+
+```
+
+```{r loop up key SNPs}
+setwd("/ccls/home/sli/GWAS/bcells3")
+library(tidyverse)
+library(data.table)
+
+var="bcell.s3"
+
+raw = fread(paste0("meta.ccls.",var,".TBL"))%>%
+  dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+  separate(MarkerName, c("CHROM","POS","REF","ALT")) 
+
+raw1 = raw %>%
+  mutate(loc = paste0(CHROM,":",POS))
+
+lookup = fread("/ccls/home/sli/GWAS/bcell/rawfiles/lookup.meta.snps", header=FALSE) %>%
+  inner_join(raw1, by=c("V1"="loc"))
+
+lookup = lookup %>%
+  arrange(P)
+
+#write.csv(lookup, paste0(var,".meta.lookup.csv"))
+#lookup = read.csv(paste0(var,".meta.lookup.csv"),row.names = 1)
+
+dic = fread("/ccls/home/sli/GWAS/bcell/rawfiles/meta.lookup.cellP.txt") 
+colnames(dic) = c("trait","matID","chr","pos","gene")
+dic1 = dic %>% 
+  dplyr::select(matID,gene,trait)
+
+metalu = lookup%>%
+  select(ID,CHROM,POS,REF,ALT,Effect,P,Direction) %>%
+  mutate(matID = paste0(CHROM,":",POS)) %>%
+  inner_join(dic1, by="matID") %>%
+  arrange(P)
+  
+write.csv(metalu, paste0(var,".meta.lookup.gene.csv"))
+
+metalu = read.csv(paste0(var,".meta.lookup.gene.csv"))
+mean(metalu$P<0.05)
+#0.06051351
+
+```
+

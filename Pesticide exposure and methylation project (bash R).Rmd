@@ -1,0 +1,3123 @@
+---
+title: "pesticides"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: to investigate the association between DNA methylation and 245 different pesticide exposures (one by one), taking mQTLs into consideration (adding SNPs as an additional variable)
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r initial look at all the chemicals}
+setwd("~/ewas/pesticides")
+library(tidyverse)
+library(data.table)
+
+chemicals = fread("raw/124chemicals.csv") %>%
+  as.data.frame()%>%
+  dplyr::select(-V1)
+pbde = fread("raw/124pbde_battelle.csv")%>%
+  as.data.frame()%>%
+  dplyr::rename("subjectId"="subjectID")%>%
+  dplyr::select(-cctl,-birth_to_dust,-ChildId) # drop cctl and birth_to_dust from the pbde since it's duplicated
+
+totalChems = chemicals %>%
+  left_join(pbde,by="subjectId")
+
+dim(totalChems)  
+# [1] 629 246
+
+colnames(totalChems)[-c(1,2)]  = colnames(totalChems)[-c(1,2)] %>% tolower()
+colnames(totalChems) 
+#  [1] "ChildId"                          "subjectId"                       
+#   [3] "has_ha_hvs3"                      "has_dcm_hvs3"                    
+#   [5] "has_acid_hvs3"                    "has_metals_hvs3"                 
+#   [7] "has_ha_vac"                       "has_dcm_vac"                     
+#   [9] "has_acid_vac"                     "has_metals_vac"                  
+#  [11] "det_acephate"                     "det_alachlor"                    
+#  [13] "det_allethrin_i"                  "det_allethrin_ii"                
+#  [15] "det_azinphos_methyl"              "det_benzo_a_anthracene"          
+#  [17] "det_benzo_a_pyrene"               "det_benzo_b_fluoranthene"        
+#  [19] "det_benzo_k_fluoranthene"         "det_bromoxynil"                  
+#  [21] "det_bromoxynil_octanoate"         "det_butylate"                    
+#  [23] "det_carbaryl"                     "det_chlordane___alpha"           
+#  [25] "det_chlordane___gamma"            "det_chlorothalonil"              
+#  [27] "det_chlorpyrifos"                 "det_chrysene"                    
+#  [29] "det_coronene"                     "det_cotinine"                    
+#  [31] "det_cyanazine"                    "det_cyfluthrin_i"                
+#  [33] "det_cyfluthrin_ii"                "det_cyfluthrin_iii"              
+#  [35] "det_cyfluthrin_iv"                "det_cypermethrin_i"              
+#  [37] "det_cypermethrin_ii"              "det_cypermethrin_iii"            
+#  [39] "det_cypermethrin_iv"              "det_dacthal"                     
+#  [41] "det_dde"                          "det_ddt"                         
+#  [43] "det_deltamethrin"                 "det_diazinon"                    
+#  [45] "det_dibenzo_ae_pyrene"            "det_dibenzo_ah_anthracene"       
+#  [47] "det_dicamba"                      "det_dicofol"                     
+#  [49] "det_dieldrin"                     "det_dimethoate"                  
+#  [51] "det_endosulfan___beta"            "det_ethafluralin"                
+#  [53] "det_heptachlor"                   "det_indeno_123_cd_pyrene"        
+#  [55] "det_iprodione"                    "det_lindane"                     
+#  [57] "det_malathion"                    "det_mcpa"                        
+#  [59] "det_mcpp"                         "det_methidathion"                
+#  [61] "det_methoprene"                   "det_methoxychlor"                
+#  [63] "det_methyl_parathion"             "det_metolachlor"                 
+#  [65] "det_nicotine"                     "det_o_phenyl_phenol"             
+#  [67] "det_pcb_105"                      "det_pcb_118"                     
+#  [69] "det_pcb_138"                      "det_pcb_153"                     
+#  [71] "det_pcb_170"                      "det_pcb_180"                     
+#  [73] "det_pebulate"                     "det_pendimethalin"               
+#  [75] "det_pentachlorophenol"            "det_permethrin___cis"            
+#  [77] "det_permethrin___trans"           "det_phorate"                     
+#  [79] "det_phosmet"                      "det_piperonyl_butoxide"          
+#  [81] "det_prometryn"                    "det_propargite"                  
+#  [83] "det_propoxur"                     "det_simazine"                    
+#  [85] "det_tetramethrin_i"               "det_tetramethrin_ii"             
+#  [87] "det_tribufos"                     "det_trifluralin"                 
+#  [89] "det___4_d"                        "det_as"                          
+#  [91] "det_cd"                           "det_cr"                          
+#  [93] "det_cu"                           "det_pb"                          
+#  [95] "det_ni"                           "det_sn"                          
+#  [97] "det_w"                            "det_zn"                          
+#  [99] "patid"                            "cctl"                            
+# [101] "birth_to_dust"                    "logged_2_4_d_srs"                
+# [103] "logged_acephate_srs"              "logged_alachlor_srs"             
+# [105] "logged_allethrin_i_srs"           "logged_allethrin_ii_srs"         
+# [107] "logged_as"                        "logged_azinphos_methyl_srs"      
+# [109] "logged_benzo_a_anthracene_srs"    "logged_benzo_a_pyrene_srs"       
+# [111] "logged_benzo_b_fluoranthene_srs"  "logged_benzo_k_fluoranthene_srs" 
+# [113] "logged_bromoxynil_srs"            "logged_bromoxynil_octanoate_srs" 
+# [115] "logged_butylate_srs"              "logged_carbaryl_srs"             
+# [117] "logged_cd"                        "logged_chlordane___alpha_srs"    
+# [119] "logged_chlordane___gamma_srs"     "logged_chlorothalonil_srs"       
+# [121] "logged_chlorpyrifos_srs"          "logged_chrysene_srs"             
+# [123] "logged_coronene_srs"              "logged_cotinine_srs"             
+# [125] "logged_cr"                        "logged_cu"                       
+# [127] "logged_cyanazine_srs"             "logged_cyfluthrin_i_srs"         
+# [129] "logged_cyfluthrin_ii_srs"         "logged_cyfluthrin_iii_srs"       
+# [131] "logged_cyfluthrin_iv_srs"         "logged_cypermethrin_i_srs"       
+# [133] "logged_cypermethrin_ii_srs"       "logged_cypermethrin_iii_srs"     
+# [135] "logged_cypermethrin_iv_srs"       "logged_dacthal_srs"              
+# [137] "logged_dde_srs"                   "logged_ddt_srs"                  
+# [139] "logged_deltamethrin_srs"          "logged_diazinon_srs"             
+# [141] "logged_dibenzo_ae_pyrene_srs"     "logged_dibenzo_ah_anthracene_srs"
+# [143] "logged_dicamba_srs"               "logged_dicofol_srs"              
+# [145] "logged_dieldrin_srs"              "logged_dimethoate_srs"           
+# [147] "logged_endosulfan___beta_srs"     "logged_ethafluralin_srs"         
+# [149] "logged_heptachlor_srs"            "logged_indeno_123_cd_pyrene_srs" 
+# [151] "logged_iprodione_srs"             "logged_lindane_srs"              
+# [153] "logged_malathion_srs"             "logged_mcpa_srs"                 
+# [155] "logged_mcpp_srs"                  "logged_methidathion_srs"         
+# [157] "logged_methoprene_srs"            "logged_methoxychlor_srs"         
+# [159] "logged_methyl_parathion_srs"      "logged_metolachlor_srs"          
+# [161] "logged_ni"                        "logged_nicotine_srs"             
+# [163] "logged_o_phenyl_phenol_srs"       "logged_pb"                       
+# [165] "logged_pcb_105_srs"               "logged_pcb_118_srs"              
+# [167] "logged_pcb_138_srs"               "logged_pcb_153_srs"              
+# [169] "logged_pcb_170_srs"               "logged_pcb_180_srs"              
+# [171] "logged_pebulate_srs"              "logged_pendimethalin_srs"        
+# [173] "logged_pentachlorophenol_srs"     "logged_permethrin___cis_srs"     
+# [175] "logged_permethrin___trans_srs"    "logged_phorate_srs"              
+# [177] "logged_phosmet_srs"               "logged_piperonyl_butoxide_srs"   
+# [179] "logged_prometryn_srs"             "logged_propargite_srs"           
+# [181] "logged_propoxur_srs"              "logged_simazine_srs"             
+# [183] "logged_sn"                        "logged_tetramethrin_i_srs"       
+# [185] "logged_tetramethrin_ii_srs"       "logged_tribufos_srs"             
+# [187] "logged_trifluralin_srs"           "logged_w"                        
+# [189] "logged_zn"                        "logged_pcb_all"                  
+# [191] "res_since_birth"                  "bde_28"                          
+# [193] "bde_47"                           "bde_100"                         
+# [195] "bde_99"                           "bde_154"                         
+# [197] "bde_153"                          "bde_183"                         
+# [199] "bde_197"                          "bde_196"                         
+# [201] "bde_203"                          "bde_207"                         
+# [203] "bde_206"                          "bde_209"                         
+# [205] "bde_208"                          "uncorr_bde_208"                  
+# [207] "uncorr_bde_207"                   "uncorr_bde_206"                  
+# [209] "uncorr_bde_209"                   "det_bde_28"                      
+# [211] "det_bde_47"                       "det_bde_99"                      
+# [213] "det_bde_100"                      "det_bde_153"                     
+# [215] "det_bde_154"                      "det_bde_183"                     
+# [217] "det_bde_196"                      "det_bde_197"                     
+# [219] "det_bde_203"                      "det_bde_206"                     
+# [221] "det_bde_207"                      "det_bde_208"                     
+# [223] "det_bde_209"                      "det_uncorr_bde_206"              
+# [225] "det_uncorr_bde_207"               "det_uncorr_bde_208"              
+# [227] "det_uncorr_bde_209"               "dl_bde_28"                       
+# [229] "dl_bde_47"                        "dl_bde_99"                       
+# [231] "dl_bde_100"                       "dl_bde_153"                      
+# [233] "dl_bde_154"                       "dl_bde_183"                      
+# [235] "dl_bde_196"                       "dl_bde_197"                      
+# [237] "dl_bde_203"                       "dl_bde_206"                      
+# [239] "dl_bde_207"                       "dl_bde_208"                      
+# [241] "dl_bde_209"                       "dl_uncorr_bde_206"               
+# [243] "dl_uncorr_bde_207"                "dl_uncorr_bde_208"               
+# [245] "dl_uncorr_bde_209"                "dust_type"   
+
+# export type of chemicals
+dic = fread("raw/datadic.csv",header=FALSE) %>% as.data.frame() %>%
+  mutate(V2=tolower(V2),
+         V1=tolower(V1))
+chemicals = data.frame(chems = colnames(totalChems)[-c(1,2,246)])
+chemicals$chemicalNames = gsub("has_|det_|logged_|uncorr_","",chemicals$chems)
+chemicals1 = chemicals %>%
+  arrange(chemicalNames) %>%
+  distinct(chemicalNames,.keep_all=TRUE) %>%
+  left_join(dic,by=c("chemicalNames"="V1"))  %>%
+  dplyr::select(-chems)
+write.csv(chemicals1,"total.chem.csv")
+
+# investigate columns that don't look like chemicals
+totalChems$cctl
+totalChems$birth_to_dust
+totalChems$patid
+totalChems$res_since_birth
+totalChems$dust_type
+
+totalChems1 = totalChems %>%
+  as.data.frame()%>%
+  column_to_rownames(var="subjectId") %>%
+  dplyr::select(-ChildId,-cctl,-birth_to_dust,-patid,-res_since_birth,-dust_type) %>%
+  t %>%
+  as.data.frame()
+
+allChems = rownames(totalChems1)
+chemicals = sub("^(logged|det)_","",allChems)%>%
+  sub("^has_","",.)%>%
+  sub("_srs$","",.)%>%
+  sub("___","_",.)%>%
+  sub("__4_d","4_d",.)%>%
+  sub("2_4_d","4_d",.)
+totalChems1$chemicals = chemicals
+
+## a list of indexs
+detect = which(grepl("det_|has_",allChems))
+totalChems1$detection=0
+totalChems1$detection[detect]=1
+  
+totalChems2 = totalChems1 %>%
+  dplyr::select(chemicals,detection,everything())
+  
+# checking how many chemicals have both log and detected
+dose1 = chemicals[grepl("^logged|dl",allChems)]
+dose2 = chemicals[!grepl("^logged|dl|^det|has",allChems)]
+dose = c(dose1,dose2)
+
+detectD = chemicals[grepl("^det|has",allChems)]
+
+dose[which(!dose%in%detectD)]
+## the following chemicals do not have a corresponding det variable  (use linear regression)
+# "pcb_all"           "dl_bde_28"         "dl_bde_47"         "dl_bde_99"         
+# "dl_bde_100"        "dl_bde_153"        "dl_bde_154"        "dl_bde_183"        "dl_bde_196"       
+# "dl_bde_197"        "dl_bde_203"        "dl_bde_206"        "dl_bde_207"        
+# "dl_bde_208"        "dl_bde_209"        "dl_uncorr_bde_206" "dl_uncorr_bde_207" "dl_uncorr_bde_208"
+# "dl_uncorr_bde_209"
+
+detectD[which(!detectD%in%dose)]
+## the following detection variables do not have a corresponding dose variable (use logistic regression)
+# "ha_hvs3"     "dcm_hvs3"    "acid_hvs3"   "metals_hvs3" "ha_vac"      "dcm_vac"     "acid_vac"    "metals_vac" 
+
+write.table(totalChems2,"totalChems.sets124.txt",
+            quote=FALSE,
+            sep='\t')
+
+############
+# PCA plot for all pesticides with dose info
+library(factoextra)
+
+totalChems2 = fread("totalChems.sets124.txt")%>%
+  as.data.frame()%>%
+  column_to_rownames(var="V1") 
+
+totalChems2$bde=0
+totalChems2$bde[which(grepl("bde",totalChems2$chemicals))]=1
+
+rownames(totalChems2) <- c()
+
+# chemicals first
+totalChems3.chemical = totalChems2 %>%
+  filter(detection==0) %>%
+  filter(bde==0) %>%
+  dplyr::select(-detection,-bde) %>%
+  column_to_rownames(var="chemicals") %>%
+  as.matrix()
+totalChems.chemical.1 = totalChems3.chemical[ , colSums(is.na(totalChems3.chemical)) == 0] # remove subjects with NA measures
+
+drops = c(which(apply(totalChems.chemical.1, 1, var)==Inf),
+          which(apply(totalChems.chemical.1, 1, var)==0))
+
+if(length(drops)>0){ # drop chemicals with constant values
+  consts = names(drops)  
+  totalChems.chemical.1 = totalChems.chemical.1[-which(rownames(totalChems.chemical.1)%in%consts),] 
+}
+
+totalChems.pca = prcomp(totalChems.chemical.1, scale = TRUE)
+
+fviz_eig(totalChems.pca)
+
+#options(ggrepel.max.overlaps = Inf)
+fviz_pca_ind(totalChems.pca,
+             col.ind = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+ggsave("chems.pca.jpg",width=10,height=10)
+
+# bde 
+totalChems3.bde = totalChems2 %>%
+  filter(detection==0) %>%
+  filter(bde==1) %>%
+  dplyr::select(-detection,-bde) %>%
+  column_to_rownames(var="chemicals") %>%
+  as.matrix()
+totalChems.bde.1 = totalChems3.bde[ , colSums(is.na(totalChems3.bde)) == 0] # remove subjects with NA measures
+
+drops = c(which(apply(totalChems.bde.1, 1, var)==Inf),
+          which(apply(totalChems.bde.1, 1, var)==0))
+
+if(length(drops)>0){ # drop chemicals with constant values
+  consts = names(drops)  
+  totalChems.bde.1 = totalChems.bde.1[-which(rownames(totalChems.bde.1)%in%consts),] 
+}
+
+totalChems.bde.pca = prcomp(totalChems.bde.1, scale = TRUE)
+
+fviz_eig(totalChems.bde.pca)
+
+#options(ggrepel.max.overlaps = Inf)
+fviz_pca_ind(totalChems.bde.pca,
+             col.ind = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+ggsave("chems.bde.pca.jpg",width=10,height=10)
+
+# conclusion, seems there is no clear and pretty clusters for each type. therefore, run each marker one by one
+### however, can get rid of all markers starting with dl
+
+
+# Use dl_bde_xxx instead of bde_xxx
+totalChemsTt = fread("totalChems.sets124.txt") %>%
+  mutate(V1 = ifelse(grepl("^bde",totalChemsTt$V1),gsub("^bde","nodl_bde",V1),V1)) %>%
+  mutate(V1 = ifelse(grepl("dl_bde",totalChemsTt$V1),gsub("^dl_bde","bde",V1),V1)) %>%
+  mutate(V1 = ifelse(grepl("dl_bde",totalChemsTt$V1),gsub("^dl_bde","bde",V1),V1))
+  
+write.table(totalChemsTt,"totalChems.sets124.txt",
+            quote=FALSE,
+            sep='\t',
+            row.names = FALSE)
+
+```
+
+```{r prepare ccls covariates file}
+
+library(tidyverse)
+library(data.table)
+library(lumi)
+
+setwd("~/ewas/pesticides")
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+
+# prepare a clinial variable
+ clinical1 = read.csv("~/sets/set1/clinical_variables.csv") %>%
+   filter(Trisomy21.cnm==0)%>%
+   mutate(Batch = as.factor(Batch),
+          caco = as.factor(caco),
+          setN=1) %>%
+   dplyr::select(subjectId,caco,birthWt,gestage,sex,setN,Batch,beadPosition)
+   
+  dcp1 = fread("~/sets/set1/idol_deconvolution.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+    na.omit() %>%
+    inner_join(clinical1,by="beadPosition")
+
+  epis1 = fread("~/sets/set1/glintControl.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+    na.omit() %>%
+    inner_join(dcp1,by="beadPosition")
+  
+
+ clinical2 = read.csv("~/sets/set2/clinical_variables.csv") %>%
+   filter(Trisomy21.cnm==0)%>%
+   mutate(Batch = as.factor(Batch),
+          caco = as.factor(caco),
+          setN=2) %>%
+   dplyr::select(subjectId,caco,birthWt,gestage,sex,setN,Batch,beadPosition)
+   
+  dcp2 = fread("~/sets/set2/idol_deconvolution.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+    na.omit() %>%
+    inner_join(clinical2,by="beadPosition")
+
+  epis2 = fread("~/sets/set2/glintControl.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+    na.omit() %>%
+    inner_join(dcp2,by="beadPosition")
+
+ clinical4 = read.csv("~/sets/set4/clinical_variables.csv") %>%
+   filter(smp_type=="bg",Trisomy21.cnm==0)%>%
+   mutate(birthWt = ch_birthwt_bc_full,
+          Batch = as.factor(Batch),
+          caco = as.factor(caco),
+          setN=4) %>%
+   dplyr::select(caco,subjectId,birthWt,gestage,sex,setN,Batch,beadPosition)
+   
+  dcp4 = fread("~/sets/set4/idol_deconvolution.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+    na.omit() %>%
+    inner_join(clinical4,by="beadPosition")
+
+  epis4 = fread("~/sets/set4/glintControl.csv") %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5,epi6,epi7,epi8,epi9,epi10) %>%
+    na.omit() %>%
+    inner_join(dcp4,by="beadPosition")
+
+            
+  clinical.chemical = rbind(epis1,epis2,epis4) %>% as.data.frame()
+  
+ write_rds(clinical.chemical,"clinical.chemical.rds")
+     
+# prepare methylation data
+
+for(setnum in c(1,2,4)){
+  
+  clinical.chemical.set0 = clinical.chemical %>% 
+    filter(setN==setnum)%>%
+    mutate(ID=paste0("0_",subjectId))
+  
+  methy_tm_0 = read_rds(paste0("~/sets/set",setnum,"/set",setnum,"_Sesame_beta_imputed.rds")) 
+  rownames(methy_tm_0)<- c()
+  
+  methy_tm =  methy_tm_0 %>%
+    column_to_rownames("probeId") %>%
+    as.data.frame() %>% 
+    data.matrix() 
+  
+  subjectsIncluded = intersect(clinical.chemical.set0$beadPosition,colnames(methy_tm))
+  
+  clinical.chemical.set05 = clinical.chemical.set0 %>%
+    column_to_rownames(var="beadPosition")
+  clinical.chemical.set = clinical.chemical.set05[subjectsIncluded,] %>%
+    rownames_to_column(var="beadPosition")
+  
+  methy_tm_1 = methy_tm[,subjectsIncluded]
+  colnames(methy_tm_1) = clinical.chemical.set$ID
+  
+  cgInd = which(grepl("cg",rownames(methy_tm_1)))
+  methy_tm_2 = methy_tm_1[cgInd,] %>% beta2m()
+  
+  replace.outliers <- winsorize(methy_tm_2,0.005)
+  
+  methy <- replace.outliers$methylation %>% 
+    as.data.frame() %>%
+    rownames_to_column(var="probeId")
+  
+  write_rds(methy,paste0("methSet",setnum,".chemicals.rds"))
+  }
+
+```
+
+```{r start scanning!}
+
+setwd("~/ewas/pesticides")
+library(tidyverse)
+library(data.table)
+library(MASS)
+library(lmtest)
+library(sfsmisc)
+library(sandwich)
+library(parallel) 
+
+cl <- makeCluster(40, type="FORK")
+clusterEvalQ(cl,library(MASS))
+clusterEvalQ(cl,library(lmtest))
+
+linear <- function(meth,cov){
+
+  #    write_rds(meth,"meth.test.rds")
+  #}
+  
+  # meth = read_rds("meth.test.rds")
+  # cov = covs
+
+  probe <- unname(meth[1])
+  methDF = meth[-1] %>% as.numeric()
+  
+  dat <- data.frame(y = methDF, cov)
+  ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+  #mod <- try(rlm(ff, data = dat, maxit = 200),silent = TRUE)
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  
+  #cf = try(coeftest(mod),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  
+  if ( (class(mod)=="lm") & 
+       (sum(summary(mod)$coefficients[,"Pr(>|t|)"])>0) ) {
+    
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, p.value, N) 
+  } else {
+    out = c(rep(NA,3), N)
+  }
+  names(out) = c("Beta","SE", "P", "N"); return(out) 
+}
+
+gene.linear <- function(meth,cov,gene){
+  
+  #    write_rds(meth,"meth.test.rds")}
+  # meth = read_rds("meth.test.rds")
+  # cov = covs
+  # gene = mtqls
+  
+  probe <- unname(meth[1])
+  
+  #print(probe)
+  
+  methDF = meth[-1] %>% as.numeric()
+  
+  SNPname <- gene[which(gene$CpG == probe), 1]  %>% as.character()  
+  SNP <-  gene[which(gene$CpG == probe), -c(1:3)] %>% t() %>% as.data.frame()
+  colnames(SNP) <- "SNP"
+  
+  if(length(table(SNP$SNP))==1){
+    dat <- data.frame(y = methDF, cov)
+    ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+  }else{
+    dat <- data.frame(y = methDF, cov,SNP)
+    ff  <- formula(paste("y ~ ", paste0(c(colnames(cov),"SNP"),collapse="+")))
+  }
+  
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  
+  #cf = try(coeftest(mod),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  
+  if ( (class(mod)=="lm") & 
+       (sum(summary(mod)$coefficients[,"Pr(>|t|)"])>0) ) {
+    
+    SNPname=SNPname
+    #pvals = try(f.robftest(mod, var = colnames(cov)[1]),silent = TRUE)
+    #coef = cf[2,"Estimate"]
+    #F.value = ifelse(class(pvals)=="htest",pvals$statistic,NA)
+    #p.value = ifelse(class(pvals)=="htest",pvals$p.value,NA)
+    #out = c(SNPname,coef, F.value, p.value, N) 
+
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(SNPname,coef, SE, p.value, N) 
+  } else {
+    out = c(SNPname,rep(NA,3), N)
+  }
+  names(out) = c("snp","Beta","SE", "P", "N"); return(out) 
+}
+
+totalChems2 = fread("totalChems.sets124.txt")%>%
+  as.data.frame()%>%
+  column_to_rownames(var="V1") 
+
+# do not need to scan nodl and uncorr since they don't represent too different datapoints, according to PCA
+totalChems3 = totalChems2[which(!grepl("uncorr|nodl",rownames(totalChems2))),]
+# [1] 213 631
+
+#table(totalChems3$chemicals)
+
+all.scan.chemicals = totalChems3$chemicals %>% unique()
+## in total, will scan 125 chemicals
+#write_rds(all.scan.chemicals,"all.scan.chemicals.rds")
+
+all.scan.chemicals = all.scan.chemicals[c(which(all.scan.chemicals=="pcb_all"),which(all.scan.chemicals!="pcb_all"))]
+
+## the following chemicals do not have a corresponding det variable  (use linear regression)
+# "pcb_all"
+
+## the following detection variables do not have a corresponding dose variable (use logistic regression)
+# "ha_hvs3"     "dcm_hvs3"    "acid_hvs3"   "metals_hvs3" "ha_vac"      "dcm_vac"     "acid_vac"    "metals_vac" 
+
+for(chemi in all.scan.chemicals){
+  
+  #chemi = "pcb_all"
+  
+  # sub-select this chemical
+  totalChems.sub = totalChems3 %>% filter(chemicals==chemi)
+
+  if(!dim(totalChems.sub)[1] %in% c(1,2)){
+    print(paste0(chemi," is problematic!"))
+    next
+    }
+    
+  if(dim(totalChems.sub)[1]==2) { # for chemicals with both detection and dose info
+    totalChems.sub.detect = totalChems.sub %>% 
+      filter(detection==1) %>% 
+      dplyr::select(-chemicals,-detection) %>%
+      t %>% 
+      as.data.frame() %>% 
+      na.omit()
+    detectRate = colMeans(totalChems.sub.detect)
+    if(detectRate>0.3){
+      modelType="continuous"
+      totalChems.sub.toUse = totalChems.sub %>% 
+        filter(detection==0) %>%
+        dplyr::select(-chemicals,-detection) %>%
+        t %>%
+        as.data.frame() %>%
+        rownames_to_column(var="subjectId")
+    } else{
+      modelType="binary"
+      totalChems.sub.toUse = totalChems.sub %>% 
+        filter(detection==1) %>%
+        dplyr::select(-chemicals,-detection) %>%
+        t %>%
+        as.data.frame() %>%
+        rownames_to_column(var="subjectId")
+    }
+  } else { # for chemicals with only detection or dose info
+    if(chemi %in% c("pcb_all")){
+        modelType="continuous"
+        totalChems.sub.toUse = totalChems.sub %>% 
+          filter(detection==0) %>%
+          dplyr::select(-chemicals,-detection) %>%
+          t %>%
+          as.data.frame() %>%
+          rownames_to_column(var="subjectId")
+        }
+
+    if(chemi %in% c("ha_hvs3","dcm_hvs3","acid_hvs3","metals_hvs3","ha_vac","dcm_vac","acid_vac","metals_vac")){
+      modelType="binary"
+      totalChems.sub.toUse = totalChems.sub %>% 
+        filter(detection==1) %>%
+        dplyr::select(-chemicals,-detection) %>%
+        t %>%
+        as.data.frame() %>%
+        rownames_to_column(var="subjectId")
+      }
+  }
+
+    print(paste0("start running chemical ", chemi))
+    print(paste0("model used is ", modelType, " linear regression"))
+
+    indpd = setdiff(colnames(totalChems.sub.toUse),"subjectId")
+    
+    covs0_0 = read_rds("clinical.chemical.rds")%>%
+      as.data.frame()%>%
+      dplyr::select(-beadPosition)%>%
+      mutate(subjectId=as.character(subjectId),
+             ID=paste0("0_",subjectId))%>%
+      inner_join(totalChems.sub.toUse,by="subjectId") %>%
+      dplyr::select(one_of(indpd),everything())
+    
+    #write_rds(covs0_0,"~/ewas/pesticides/pcb_all_paper/pcb_all_all_subs.rds")
+    
+    for (set in c(1,2,4)){
+      
+      print(paste0("start running set ", set))
+      
+      covs0 = covs0_0 %>% 
+        filter(setN==set) %>%
+        dplyr::select(-setN,-subjectId)%>%
+        column_to_rownames(var="ID")
+
+      if(length(unique(covs0[,indpd]%>%na.omit()))==1){
+        print(paste0("set ", set, " ", chemi," is singular, skip!"))
+        next
+      }
+      
+      mtqls0 = fread(paste0("~/mQTL/ccls.set",set,".mqtls.hd")) %>% 
+        as.data.frame()
+      
+      methyl0 = read_rds(paste0("methSet",set,".chemicals.rds")) %>%
+        column_to_rownames(var="probeId")%>%
+        as.data.frame()
+      
+      subs.list = intersect(intersect(rownames(covs0),colnames(methyl0)), colnames(mtqls0)) 
+      
+      methyl = methyl0[,subs.list]
+      covs = covs0[subs.list,]%>%
+        mutate(Batch=as.factor(as.character(Batch)),
+               caco=as.factor(as.character(caco)),
+               sex=as.factor(as.character(sex)))
+    if(length(table(covs$caco))==1)covs=covs %>% dplyr::select(-caco)
+    if(length(table(covs$sex))==1)covs=covs %>% dplyr::select(-sex)
+    # the following line converts batches contatining only 1 subject into batch containing second smallest number
+      if(sum(table(covs$Batch)==1)!=0){
+    covs[which(covs$Batch %in% names(which(table(covs$Batch)==1))), "Batch"] = 
+      names(which(table(covs$Batch)==sort(unique(table(covs$Batch)))[2]))[1]}
+      
+      mtqls = mtqls0[,c("SNP","CpG","P-value",subs.list)]
+      
+      probes = rownames(methyl)[which(rownames(methyl)%in%mtqls$CpG)] 
+      
+      methyl.nosnp = methyl[setdiff(rownames(methyl),probes),] %>%
+        rownames_to_column(var="cpg")
+      rownames(methyl.nosnp) <- methyl.nosnp$cpg
+      
+      #methyl.nosnp.t = methyl.nosnp[1:100,,drop=FALSE]
+      #results.nosnp <- t(apply(methyl.nosnp.t, 1, linear, covs)) 
+      
+      results.nosnp <- t(parApply(cl, methyl.nosnp, 1, linear, covs)) 
+      
+      results.nosnp <- as.data.frame(results.nosnp) %>%
+        rownames_to_column(var="CpG")%>%
+        mutate(snp="none")%>%
+        mutate(N=as.numeric(N))%>%
+        mutate(P=as.numeric(P))%>%
+        filter(!is.na(P)) %>%
+        dplyr::select(CpG,snp,Beta,SE,P,N)
+      
+      
+      methyl.cpg = methyl[probes,] %>% rownames_to_column(var="cpg")
+      rownames(methyl.cpg) <- methyl.cpg$cpg
+      #methyl.cpg.t = methyl.cpg[1:100,,drop=FALSE]
+      #results.snp <- t(apply(methyl.cpg.t, 1, gene.linear, covs, mtqls)) 
+        
+      results.snp <- t(parApply(cl, methyl.cpg, 1, gene.linear, covs, mtqls)) 
+      results.snp <- as.data.frame(results.snp) %>%
+        rownames_to_column(var="CpG")%>%
+        mutate(N=as.numeric(N))%>%
+        mutate(P=as.numeric(P))%>%
+        filter(!is.na(P))
+      
+      results.snp.combind = rbind(results.nosnp,results.snp) %>%
+        as.data.frame()%>%
+        arrange(P)
+    
+
+      write.table(results.snp.combind,
+                  paste0("scanning/chem.snp.ewas.",chemi,".set",set,".txt"),
+                  quote=FALSE,
+                  row.names = FALSE,
+                  sep='\t')  
+      
+    tmp.snp <- results.snp.combind %>% 
+      dplyr::select(P) %>% mutate(P=as.numeric(P)) %>% na.omit() 
+    lambda.snp = median(qchisq(1- tmp.snp$P,1))/qchisq(0.5,1)
+    print(paste0("In ",chemi," lambda of set ",set,": ",round(lambda.snp, 2)))
+      
+    }
+  
+}  
+
+
+stopCluster(cl)
+rm(list=ls())
+  
+
+
+```
+
+```{r total PCBs stratified by race and then meta-analysis}
+
+setwd("~/ewas/pesticides/pcb_all")
+library(tidyverse)
+library(data.table)
+library(MASS)
+library(lmtest)
+library(sfsmisc)
+library(sandwich)
+library(parallel) 
+
+cl <- makeCluster(40, type="FORK")
+clusterEvalQ(cl,library(MASS))
+clusterEvalQ(cl,library(lmtest))
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+linear <- function(meth,cov){
+
+  #    write_rds(meth,"meth.test.rds")
+  #}
+  
+  # meth = read_rds("meth.test.rds")
+  # cov = covs
+
+  probe <- unname(meth[1])
+  methDF = meth[-1] %>% as.numeric()
+  
+  dat <- data.frame(y = methDF, cov)
+  ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+  #mod <- try(rlm(ff, data = dat, maxit = 200),silent = TRUE)
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  
+  #cf = try(coeftest(mod),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  
+  if (class(mod)=="lm") {
+    
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, p.value, N) 
+  } else {
+    out = c(rep(NA,3), N)
+  }
+  names(out) = c("Beta","SE", "P", "N"); return(out) 
+}
+gene.linear <- function(meth,cov,gene){
+  
+  #    write_rds(meth,"meth.test.rds")
+  #}
+  
+  # meth = read_rds("meth.test.rds")
+  # cov = covs
+  # gene = mtqls
+  
+  probe <- unname(meth[1])
+  
+  #print(probe)
+  
+  methDF = meth[-1] %>% as.numeric()
+  
+  SNPname <- gene[which(gene$CpG == probe), 1]  %>% as.character()  
+  SNP <-  gene[which(gene$CpG == probe), -c(1:3)] %>% t() %>% as.data.frame()
+  colnames(SNP) <- "SNP"
+  
+  if(length(table(SNP$SNP))==1){
+    dat <- data.frame(y = methDF, cov)
+    ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+  }else{
+    dat <- data.frame(y = methDF, cov,SNP)
+    ff  <- formula(paste("y ~ ", paste0(c(colnames(cov),"SNP"),collapse="+")))
+  }
+  
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  
+  #cf = try(coeftest(mod),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  
+  if (class(mod)=="lm") {
+    
+    SNPname=SNPname
+    #pvals = try(f.robftest(mod, var = colnames(cov)[1]),silent = TRUE)
+    #coef = cf[2,"Estimate"]
+    #F.value = ifelse(class(pvals)=="htest",pvals$statistic,NA)
+    #p.value = ifelse(class(pvals)=="htest",pvals$p.value,NA)
+    #out = c(SNPname,coef, F.value, p.value, N) 
+
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(SNPname,coef, SE, p.value, N) 
+  } else {
+    out = c(SNPname,rep(NA,3), N)
+  }
+  names(out) = c("snp","Beta","SE", "P", "N"); return(out) 
+}
+
+chemi = "pcb_all"
+totalChems2 = fread("~/ewas/pesticides/totalChems.sets124.txt")%>%
+  as.data.frame()%>%
+  column_to_rownames(var="V1") %>% 
+  filter(chemicals==chemi) %>%
+  dplyr::select(-chemicals,-detection) %>%
+  t %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var="subjectId")%>%
+  na.omit()
+
+# prepare a clinial variable
+clinical1 = read.csv("~/sets/set1/clinical_variables.csv") %>%
+ filter(Trisomy21.cnm==0)%>%
+ mutate(Batch = as.factor(Batch),
+        caco = as.factor(caco),
+        setN=1) %>%
+ dplyr::select(subjectId,caco,birthWt,gestage,sex,setN,Batch,race,beadPosition)
+ 
+dcp1 = fread("~/sets/set1/idol_deconvolution.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+  na.omit() %>%
+  inner_join(clinical1,by="beadPosition")
+
+epis1 = fread("~/sets/set1/glintControl.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5) %>%
+  na.omit() %>%
+  inner_join(dcp1,by="beadPosition")
+
+clinical2 = read.csv("~/sets/set2/clinical_variables.csv") %>%
+ filter(Trisomy21.cnm==0)%>%
+ mutate(Batch = as.factor(Batch),
+        caco = as.factor(caco),
+        setN=2) %>%
+ dplyr::select(subjectId,caco,birthWt,gestage,sex,setN,Batch,race,beadPosition)
+ 
+dcp2 = fread("~/sets/set2/idol_deconvolution.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+  na.omit() %>%
+  inner_join(clinical2,by="beadPosition")
+
+epis2 = fread("~/sets/set2/glintControl.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5) %>%
+  na.omit() %>%
+  inner_join(dcp2,by="beadPosition")
+
+clinical4 = read.csv("~/sets/set4/clinical_variables.csv") %>%
+ filter(smp_type=="bg",Trisomy21.cnm==0)%>%
+ mutate(birthWt = ch_birthwt_bc_full,
+        Batch = as.factor(Batch),
+        caco = as.factor(caco),
+        setN=4) %>%
+ dplyr::select(caco,subjectId,birthWt,gestage,sex,setN,Batch,race,beadPosition)
+ 
+dcp4 = fread("~/sets/set4/idol_deconvolution.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+  na.omit() %>%
+  inner_join(clinical4,by="beadPosition")
+
+epis4 = fread("~/sets/set4/glintControl.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5) %>%
+  na.omit() %>%
+  inner_join(dcp4,by="beadPosition")
+
+clinical.chemical = rbind(epis1,epis2,epis4) %>% 
+  as.data.frame() %>%
+  filter(subjectId %in% totalChems2$subjectId)
+
+write_rds(clinical.chemical,"clinical.pcb_all.rds")
+     
+# prepare methylation data
+for(setnum in c(1,2,4)){
+  
+  clinical.chemical.set0 = clinical.chemical %>% 
+    filter(setN==setnum)%>%
+    mutate(ID=paste0("0_",subjectId))
+  
+  methy_tm_0 = read_rds(paste0("~/sets/set",setnum,"/set",setnum,"_Sesame_beta_imputed.rds")) 
+  rownames(methy_tm_0)<- c()
+  
+  methy_tm =  methy_tm_0 %>%
+    column_to_rownames("probeId") %>%
+    as.data.frame() %>% 
+    data.matrix() 
+  
+  subjectsIncluded = intersect(clinical.chemical.set0$beadPosition,colnames(methy_tm))
+
+  clinical.chemical.set05 = clinical.chemical.set0 %>%
+    column_to_rownames(var="beadPosition")
+  clinical.chemical.set = clinical.chemical.set05[subjectsIncluded,] %>%
+    rownames_to_column(var="beadPosition")
+  
+  methy_tm_1 = methy_tm[,subjectsIncluded]
+  colnames(methy_tm_1) = clinical.chemical.set$ID
+  
+  cgInd = which(grepl("cg",rownames(methy_tm_1)))
+  methy_tm_2 = methy_tm_1[cgInd,] %>% beta2m()
+  
+  replace.outliers <- winsorize(methy_tm_2,0.005)
+  
+  methy <- replace.outliers$methylation %>% 
+    as.data.frame() %>%
+    rownames_to_column(var="probeId")
+
+  write_rds(methy,paste0("methSet",setnum,".pcb_all.rds"))
+  
+  }
+
+#################################
+# start scanning
+chemi = "pcb_all"
+
+includePC=FALSE
+
+totalChems2 = fread("~/ewas/pesticides/totalChems.sets124.txt")%>%
+  as.data.frame()%>%
+  column_to_rownames(var="V1") %>% 
+  filter(chemicals==chemi) %>%
+  dplyr::select(-chemicals,-detection) %>%
+  t %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var="subjectId")%>%
+  na.omit()
+
+covs0_0 = read_rds("clinical.pcb_all.rds")%>%
+  as.data.frame()%>%
+  dplyr::select(-beadPosition)%>%
+  mutate(subjectId=as.character(subjectId),
+         ID=paste0("0_",subjectId))%>%
+  inner_join(totalChems2,by="subjectId") %>%
+  dplyr::select(logged_pcb_all,everything())
+
+#write_rds(covs0_0,"~/ewas/pesticides/pcb_all_paper/pcb_all_by_race.rds")
+
+for (set in c(1,2,4)){
+  
+  print(paste0("start running set ", set))
+  
+  # covs0_5pc = covs0_0 %>% 
+  #   filter(setN==set) %>%
+  #   dplyr::select(-setN,-subjectId)%>%
+  #   column_to_rownames(var="ID")
+  
+  covs0 = covs0_0 %>% 
+    filter(setN==set) %>%
+    dplyr::select(-setN,-subjectId,-epi1,-epi2,-epi3,-epi4,-epi5)%>%
+    column_to_rownames(var="ID")
+
+  mtqls0 = fread(paste0("~/mQTL/ccls.set",set,".mqtls.hd")) %>% 
+    as.data.frame()
+  
+  methyl0 = read_rds(paste0("methSet",set,".pcb_all.rds")) %>%
+    column_to_rownames(var="probeId")%>%
+    as.data.frame()
+  
+  ## in whites
+  race="white"
+  
+  #if(includePC==TRUE) covs0_w = covs0_5pc %>% filter(race==1) %>% dplyr::select(-race)
+  if(includePC==FALSE) covs0_w = covs0 %>% filter(race==1) %>% dplyr::select(-race)
+  
+  subs.list = intersect(intersect(rownames(covs0_w),colnames(methyl0)), colnames(mtqls0)) 
+  
+  methyl = methyl0[,subs.list]
+  covs = covs0_w[subs.list,]%>%
+    mutate(Batch=as.factor(as.character(Batch)),
+           caco=as.factor(as.character(caco)),
+           sex=as.factor(as.character(sex)))
+  if(length(table(covs$caco))==1)covs=covs %>% dplyr::select(-caco)
+  if(length(table(covs$sex))==1)covs=covs %>% dplyr::select(-sex)
+  # the following line converts batches contatining only 1 subject into batch containing second smallest number
+  if(sum(table(covs$Batch)==1)!=0){
+    covs[which(covs$Batch %in% names(which(table(covs$Batch)==1))), "Batch"] = 
+      names(which(table(covs$Batch)==sort(unique(table(covs$Batch)))[2]))[1]}
+    
+  mtqls = mtqls0[,c("SNP","CpG","P-value",subs.list)]
+  
+  probes = rownames(methyl)[which(rownames(methyl)%in%mtqls$CpG)] 
+  
+  methyl.nosnp = methyl[setdiff(rownames(methyl),probes),] %>%
+    rownames_to_column(var="cpg")
+  rownames(methyl.nosnp) <- methyl.nosnp$cpg
+  
+  #methyl.nosnp.t = methyl.nosnp[1:100,]
+  #results.nosnp <- t(apply(methyl.nosnp.t, 1, linear, covs)) 
+  results.nosnp <- t(parApply(cl, methyl.nosnp, 1, linear, covs)) 
+  
+  results.nosnp <- as.data.frame(results.nosnp) %>%
+    rownames_to_column(var="CpG")%>%
+    mutate(snp="none")%>%
+    mutate(N=as.numeric(N))%>%
+    mutate(P=as.numeric(P))%>%
+    filter(!is.na(P)) %>%
+    dplyr::select(CpG,snp,Beta,SE,P,N)
+  
+  methyl.cpg = methyl[probes,] %>% rownames_to_column(var="cpg")
+  rownames(methyl.cpg) <- methyl.cpg$cpg
+  
+  #methyl.cpg.t = methyl.cpg[1:100,]
+  #results.snp <- t(apply(methyl.cpg.t, 1, gene.linear, covs, mtqls)) 
+  results.snp <- t(parApply(cl, methyl.cpg, 1, gene.linear, covs, mtqls)) 
+  results.snp <- as.data.frame(results.snp) %>%
+    rownames_to_column(var="CpG")%>%
+    mutate(N=as.numeric(N))%>%
+    mutate(P=as.numeric(P))%>%
+    filter(!is.na(P))
+  
+  results.snp.combind = rbind(results.nosnp,results.snp) %>%
+    as.data.frame()%>%
+    arrange(P)
+
+  if(includePC==FALSE){
+    write.table(results.snp.combind,
+                paste0(race,".snp.ewas.",chemi,".set",set,".txt"),
+                quote=FALSE,
+                row.names = FALSE,
+                sep='\t')  
+  }
+  
+  # if(includePC==TRUE){
+  #   write.table(results.snp.combind,
+  #               paste0(race,".5pc.snp.ewas.",chemi,".set",set,".txt"),
+  #               quote=FALSE,
+  #               row.names = FALSE,
+  #               sep='\t')  
+  # }
+  
+  tmp.snp <- results.snp.combind %>% dplyr::select(P) %>% 
+    mutate(P=as.numeric(P)) %>% na.omit() 
+  lambda.snp = median(qchisq(1- tmp.snp$P,1))/qchisq(0.5,1)
+  print(paste0("In ",chemi,", ",race,", lambda of set ",set,": ",round(lambda.snp, 2)))
+  
+  ## in latino
+  race="latino"
+  
+  #if(includePC==TRUE) covs0_l = covs0_5pc %>% filter(race==3) %>% dplyr::select(-race)
+  if(includePC==FALSE) covs0_l = covs0 %>% filter(race==3) %>% dplyr::select(-race)
+  
+  subs.list = intersect(intersect(rownames(covs0_l),colnames(methyl0)), colnames(mtqls0)) 
+  
+  methyl = methyl0[,subs.list]
+  covs = covs0_l[subs.list,]%>%
+    mutate(Batch=as.factor(as.character(Batch)),
+           caco=as.factor(as.character(caco)),
+           sex=as.factor(as.character(sex)))
+  if(length(table(covs$caco))==1)covs=covs %>% dplyr::select(-caco)
+  if(length(table(covs$sex))==1)covs=covs %>% dplyr::select(-sex)
+  # the following line converts batches contatining only 1 subject into batch containing second smallest number
+  if(sum(table(covs$Batch)==1)!=0){
+    covs[which(covs$Batch %in% names(which(table(covs$Batch)==1))), "Batch"] = 
+      names(which(table(covs$Batch)==sort(unique(table(covs$Batch)))[2]))[1]}
+  
+  mtqls = mtqls0[,c("SNP","CpG","P-value",subs.list)]
+  
+  probes = rownames(methyl)[which(rownames(methyl)%in%mtqls$CpG)] 
+  
+  methyl.nosnp = methyl[setdiff(rownames(methyl),probes),] %>%
+    rownames_to_column(var="cpg")
+  rownames(methyl.nosnp) <- methyl.nosnp$cpg
+  
+  #methyl.nosnp.t = methyl.nosnp[1:100,]
+  #results.nosnp <- t(apply(methyl.nosnp.t, 1, linear, covs)) 
+  results.nosnp <- t(parApply(cl, methyl.nosnp, 1, linear, covs)) 
+  
+  results.nosnp <- as.data.frame(results.nosnp) %>%
+    rownames_to_column(var="CpG")%>%
+    mutate(snp="none")%>%
+    mutate(N=as.numeric(N))%>%
+    mutate(P=as.numeric(P))%>%
+    filter(!is.na(P)) %>%
+    dplyr::select(CpG,snp,Beta,SE,P,N)
+  
+  
+  methyl.cpg = methyl[probes,] %>% rownames_to_column(var="cpg")
+  rownames(methyl.cpg) <- methyl.cpg$cpg
+  
+  #methyl.cpg.t = methyl.cpg[1:100,]
+  #results.snp <- t(apply(methyl.cpg.t, 1, gene.linear, covs, mtqls)) 
+  results.snp <- t(parApply(cl, methyl.cpg, 1, gene.linear, covs, mtqls)) 
+  results.snp <- as.data.frame(results.snp) %>%
+    rownames_to_column(var="CpG")%>%
+    mutate(N=as.numeric(N))%>%
+    mutate(P=as.numeric(P))%>%
+    filter(!is.na(P))
+  
+  results.snp.combind = rbind(results.nosnp,results.snp) %>%
+    as.data.frame()%>%
+    arrange(P)
+
+  if(includePC==FALSE){
+    write.table(results.snp.combind,
+                paste0(race,".snp.ewas.",chemi,".set",set,".txt"),
+                quote=FALSE,
+                row.names = FALSE,
+                sep='\t')  
+  }
+  
+  # if(includePC==TRUE){
+  #   write.table(results.snp.combind,
+  #               paste0(race,".5pc.snp.ewas.",chemi,".set",set,".txt"),
+  #               quote=FALSE,
+  #               row.names = FALSE,
+  #               sep='\t')  
+  # }
+  
+  tmp.snp <- results.snp.combind %>% dplyr::select(P) %>% 
+    mutate(P=as.numeric(P)) %>% na.omit() 
+  lambda.snp = median(qchisq(1- tmp.snp$P,1))/qchisq(0.5,1)
+  print(paste0("In ",chemi,", ",race,", lambda of set ",set,": ",round(lambda.snp, 2)))
+    
+}
+
+stopCluster(cl)
+rm(list=ls())
+  
+
+# [1] "start running set 1"
+# [1] "In pcb_all, white, lambda of set 1: 0.97"
+# [1] "In pcb_all, latino, lambda of set 1: 1.33"
+# [1] "start running set 2"
+# [1] "In pcb_all, white, lambda of set 2: 0.88"
+# [1] "In pcb_all, latino, lambda of set 2: 0.9"
+# [1] "start running set 4"
+# [1] "In pcb_all, white, lambda of set 4: 1.37"
+# [1] "In pcb_all, latino, lambda of set 4: 1.14"
+
+
+```
+
+```{r meta-analysis of all substances from 3 sets}
+
+setwd("~/ewas/pesticides/scanning")
+library(tidyverse)
+library(data.table)
+library(metafor)
+library(reshape)
+library(foreach)
+
+# n.cores <- parallel::detectCores() - 1
+# print(n.cores)
+
+n.cores = 20
+
+my.cluster <- parallel::makeCluster(
+  n.cores, 
+  type = "FORK")
+print(my.cluster)
+
+doParallel::registerDoParallel(cl = my.cluster)
+print(foreach::getDoParRegistered())
+print(foreach::getDoParWorkers())
+
+fixed.effects.meta.analysis <- function(list.of.studies,data){
+                              require(metafor)
+                              coefs = data[,c("CpG",paste0("coef.",list.of.studies))]
+                              ses = data[,c("CpG",paste0("se.",list.of.studies))]
+                              require(reshape)
+                              coefs = melt(coefs)
+                              names(coefs) <- c("CpG","set","coef")
+                              ses = melt(ses)
+                              data.long = cbind(coefs,ses[,"value"])
+                              names(data.long)<-c("CpG","set","coef","se")
+                              res = split(data.long, f=data$CpG)
+                              res = lapply(res, function(x) rma.uni(slab=x$study,
+                                                                    yi=x$coef,
+                                                                    sei=x$se,
+                                                                    method="FE",
+                                                                    weighted=TRUE))
+                              res
+                              }
+
+extract.and.merge.meta.analysis <-function(meta.res,data){
+                                  require(plyr)
+                                  data.meta = ldply(lapply(meta.res, function(x)
+                                    unlist(c(x$b[[1]],x[c("se","pval","k","QE","QEp","I2","H2")]))))
+                                  colnames(data.meta)<-c("CpG","coef.fe","se.fe","p.fe","set_nums",
+                                                         "q.fe","het.p.fe","i2.fe","h2.fe")
+                                  data = merge(data,data.meta,by="CpG",all.x=T)
+                                  data
+                                  }
+
+all.scan.chemical = read_rds("~/ewas/pesticides/all.scan.chemicals.rds")
+all.scan.chemical = all.scan.chemical[c(which(all.scan.chemical=="pcb_all"),which(all.scan.chemical!="pcb_all"))]
+
+foreach(
+  chemical = all.scan.chemical
+  ) %dopar% {
+  
+  file.list.subs = list.files()[grepl(paste0("chem.snp.ewas.",chemical,".set"),list.files())] %>% sort
+  
+  if(length(file.list.subs)==1 | length(file.list.subs)>3){
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " and it should be 2 or 3"))
+    print(file.list.subs)
+  }
+  
+  if(length(file.list.subs)==2){
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " so only 2 sets will be used"))
+
+    set.file1 = str_sub(file.list.subs[1],-8,-5)  
+    file1 = fread(file.list.subs[1]) %>%
+      filter(!is.na(P)) %>%
+      dplyr::rename( !!paste0("coef.", set.file1) := Beta,
+                     !!paste0("se.", set.file1) := SE, 
+                     !!paste0("p.", set.file1) := P,
+                     !!paste0("n.", set.file1) := N,
+                     !!paste0("snp.", set.file1) := snp)
+    
+    set.file2 = str_sub(file.list.subs[2],-8,-5)  
+    file2 = fread(file.list.subs[2])%>%
+      filter(!is.na(P)) %>%
+      dplyr::rename( !!paste0("coef.", set.file2) := Beta,
+                     !!paste0("se.", set.file2) := SE, 
+                     !!paste0("p.", set.file2) := P,
+                     !!paste0("n.", set.file2) := N,
+                     !!paste0("snp.", set.file2) := snp)
+  
+    dat <- file1 %>% 
+      full_join(file2, by ="CpG") %>%
+      data.frame()
+  
+    studies <- c(set.file1,set.file2)
+    
+    meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+    dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+    
+    fwrite(dat, paste0("~/ewas/pesticides/meta/chem.snp.ewas.",chemical,".meta.txt"))
+  
+  }
+
+  if(length(file.list.subs)==3){
+    
+  print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " everything is OK."))
+    
+  set.file1 = str_sub(file.list.subs[1],-8,-5)  
+  file1 = fread(file.list.subs[1]) %>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file1) := Beta,
+                   !!paste0("se.", set.file1) := SE, 
+                   !!paste0("p.", set.file1) := P,
+                   !!paste0("n.", set.file1) := N,
+                   !!paste0("snp.", set.file1) := snp)
+  
+  set.file2 = str_sub(file.list.subs[2],-8,-5)  
+  file2 = fread(file.list.subs[2])%>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file2) := Beta,
+                   !!paste0("se.", set.file2) := SE, 
+                   !!paste0("p.", set.file2) := P,
+                   !!paste0("n.", set.file2) := N,
+                   !!paste0("snp.", set.file2) := snp)
+
+  
+  set.file3 = str_sub(file.list.subs[3],-8,-5)  
+  file3 = fread(file.list.subs[3])%>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file3) := Beta,
+                   !!paste0("se.", set.file3) := SE, 
+                   !!paste0("p.", set.file3) := P,
+                   !!paste0("n.", set.file3) := N,
+                   !!paste0("snp.", set.file3) := snp)
+
+  dat <- file1 %>% 
+    full_join(file2, by ="CpG") %>%
+    full_join(file3, by ="CpG")  %>%
+    data.frame()
+
+  studies <- c(set.file1,set.file2,set.file3)
+  
+  meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+  dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+  
+  fwrite(dat, paste0("~/ewas/pesticides/meta/chem.snp.ewas.",chemical,".meta.txt"))
+
+  }
+
+  }
+
+parallel::stopCluster(cl = my.cluster)
+
+
+## keep track of chemical and their number of sets
+#####
+for(chemical in all.scan.chemical){
+  
+    file.list.subs = list.files()[grepl(paste0("chem.snp.ewas.",chemical,".set"),list.files())] %>% sort
+  
+  if(length(file.list.subs)==1 | length(file.list.subs)>3){
+    cat("\n")
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " and it should be 2 or 3"))
+    print(file.list.subs)
+  }
+  
+  if(length(file.list.subs)==2){
+    cat("\n")
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " so only 2 sets will be used"))
+    print(file.list.subs)
+  }
+
+  if(length(file.list.subs)==3){
+  cat("\n")
+  print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " everything is OK."))
+  print(file.list.subs)
+
+  }
+}
+#####
+# [1] "the number of files is 3 for ha_hvs3 everything is OK."
+# [1] "chem.snp.ewas.ha_hvs3.set1.txt" "chem.snp.ewas.ha_hvs3.set2.txt"
+# [3] "chem.snp.ewas.ha_hvs3.set4.txt"
+# 
+# [1] "the number of files is 3 for dcm_hvs3 everything is OK."
+# [1] "chem.snp.ewas.dcm_hvs3.set1.txt" "chem.snp.ewas.dcm_hvs3.set2.txt"
+# [3] "chem.snp.ewas.dcm_hvs3.set4.txt"
+# 
+# [1] "the number of files is 3 for acid_hvs3 everything is OK."
+# [1] "chem.snp.ewas.acid_hvs3.set1.txt" "chem.snp.ewas.acid_hvs3.set2.txt"
+# [3] "chem.snp.ewas.acid_hvs3.set4.txt"
+# 
+# [1] "the number of files is 3 for metals_hvs3 everything is OK."
+# [1] "chem.snp.ewas.metals_hvs3.set1.txt" "chem.snp.ewas.metals_hvs3.set2.txt"
+# [3] "chem.snp.ewas.metals_hvs3.set4.txt"
+# 
+# [1] "the number of files is 3 for ha_vac everything is OK."
+# [1] "chem.snp.ewas.ha_vac.set1.txt" "chem.snp.ewas.ha_vac.set2.txt"
+# [3] "chem.snp.ewas.ha_vac.set4.txt"
+# 
+# [1] "the number of files is 3 for dcm_vac everything is OK."
+# [1] "chem.snp.ewas.dcm_vac.set1.txt" "chem.snp.ewas.dcm_vac.set2.txt"
+# [3] "chem.snp.ewas.dcm_vac.set4.txt"
+# 
+# [1] "the number of files is 3 for acid_vac everything is OK."
+# [1] "chem.snp.ewas.acid_vac.set1.txt" "chem.snp.ewas.acid_vac.set2.txt"
+# [3] "chem.snp.ewas.acid_vac.set4.txt"
+# 
+# [1] "the number of files is 3 for metals_vac everything is OK."
+# [1] "chem.snp.ewas.metals_vac.set1.txt" "chem.snp.ewas.metals_vac.set2.txt"
+# [3] "chem.snp.ewas.metals_vac.set4.txt"
+# 
+# [1] "the number of files is 1 for acephate and it should be 2 or 3"
+# [1] "chem.snp.ewas.acephate.set1.txt"
+# 
+# [1] "the number of files is 3 for alachlor everything is OK."
+# [1] "chem.snp.ewas.alachlor.set1.txt" "chem.snp.ewas.alachlor.set2.txt"
+# [3] "chem.snp.ewas.alachlor.set4.txt"
+# 
+# [1] "the number of files is 3 for allethrin_i everything is OK."
+# [1] "chem.snp.ewas.allethrin_i.set1.txt" "chem.snp.ewas.allethrin_i.set2.txt"
+# [3] "chem.snp.ewas.allethrin_i.set4.txt"
+# 
+# [1] "the number of files is 3 for allethrin_ii everything is OK."
+# [1] "chem.snp.ewas.allethrin_ii.set1.txt" "chem.snp.ewas.allethrin_ii.set2.txt"
+# [3] "chem.snp.ewas.allethrin_ii.set4.txt"
+# 
+# [1] "the number of files is 3 for azinphos_methyl everything is OK."
+# [1] "chem.snp.ewas.azinphos_methyl.set1.txt"
+# [2] "chem.snp.ewas.azinphos_methyl.set2.txt"
+# [3] "chem.snp.ewas.azinphos_methyl.set4.txt"
+# 
+# [1] "the number of files is 3 for benzo_a_anthracene everything is OK."
+# [1] "chem.snp.ewas.benzo_a_anthracene.set1.txt"
+# [2] "chem.snp.ewas.benzo_a_anthracene.set2.txt"
+# [3] "chem.snp.ewas.benzo_a_anthracene.set4.txt"
+# 
+# [1] "the number of files is 3 for benzo_a_pyrene everything is OK."
+# [1] "chem.snp.ewas.benzo_a_pyrene.set1.txt"
+# [2] "chem.snp.ewas.benzo_a_pyrene.set2.txt"
+# [3] "chem.snp.ewas.benzo_a_pyrene.set4.txt"
+# 
+# [1] "the number of files is 3 for benzo_b_fluoranthene everything is OK."
+# [1] "chem.snp.ewas.benzo_b_fluoranthene.set1.txt"
+# [2] "chem.snp.ewas.benzo_b_fluoranthene.set2.txt"
+# [3] "chem.snp.ewas.benzo_b_fluoranthene.set4.txt"
+# 
+# [1] "the number of files is 3 for benzo_k_fluoranthene everything is OK."
+# [1] "chem.snp.ewas.benzo_k_fluoranthene.set1.txt"
+# [2] "chem.snp.ewas.benzo_k_fluoranthene.set2.txt"
+# [3] "chem.snp.ewas.benzo_k_fluoranthene.set4.txt"
+# 
+# [1] "the number of files is 3 for bromoxynil everything is OK."
+# [1] "chem.snp.ewas.bromoxynil.set1.txt" "chem.snp.ewas.bromoxynil.set2.txt"
+# [3] "chem.snp.ewas.bromoxynil.set4.txt"
+# 
+# [1] "the number of files is 1 for bromoxynil_octanoate and it should be 2 or 3"
+# [1] "chem.snp.ewas.bromoxynil_octanoate.set1.txt"
+# 
+# [1] "the number of files is 1 for butylate and it should be 2 or 3"
+# [1] "chem.snp.ewas.butylate.set1.txt"
+# 
+# [1] "the number of files is 3 for carbaryl everything is OK."
+# [1] "chem.snp.ewas.carbaryl.set1.txt" "chem.snp.ewas.carbaryl.set2.txt"
+# [3] "chem.snp.ewas.carbaryl.set4.txt"
+# 
+# [1] "the number of files is 3 for chlordane_alpha everything is OK."
+# [1] "chem.snp.ewas.chlordane_alpha.set1.txt"
+# [2] "chem.snp.ewas.chlordane_alpha.set2.txt"
+# [3] "chem.snp.ewas.chlordane_alpha.set4.txt"
+# 
+# [1] "the number of files is 3 for chlordane_gamma everything is OK."
+# [1] "chem.snp.ewas.chlordane_gamma.set1.txt"
+# [2] "chem.snp.ewas.chlordane_gamma.set2.txt"
+# [3] "chem.snp.ewas.chlordane_gamma.set4.txt"
+# 
+# [1] "the number of files is 3 for chlorothalonil everything is OK."
+# [1] "chem.snp.ewas.chlorothalonil.set1.txt"
+# [2] "chem.snp.ewas.chlorothalonil.set2.txt"
+# [3] "chem.snp.ewas.chlorothalonil.set4.txt"
+# 
+# [1] "the number of files is 3 for chlorpyrifos everything is OK."
+# [1] "chem.snp.ewas.chlorpyrifos.set1.txt" "chem.snp.ewas.chlorpyrifos.set2.txt"
+# [3] "chem.snp.ewas.chlorpyrifos.set4.txt"
+# 
+# [1] "the number of files is 3 for chrysene everything is OK."
+# [1] "chem.snp.ewas.chrysene.set1.txt" "chem.snp.ewas.chrysene.set2.txt"
+# [3] "chem.snp.ewas.chrysene.set4.txt"
+# 
+# [1] "the number of files is 3 for coronene everything is OK."
+# [1] "chem.snp.ewas.coronene.set1.txt" "chem.snp.ewas.coronene.set2.txt"
+# [3] "chem.snp.ewas.coronene.set4.txt"
+# 
+# [1] "the number of files is 3 for cotinine everything is OK."
+# [1] "chem.snp.ewas.cotinine.set1.txt" "chem.snp.ewas.cotinine.set2.txt"
+# [3] "chem.snp.ewas.cotinine.set4.txt"
+# 
+# [1] "the number of files is 2 for cyanazine so only 2 sets will be used"
+# [1] "chem.snp.ewas.cyanazine.set1.txt" "chem.snp.ewas.cyanazine.set2.txt"
+# 
+# [1] "the number of files is 3 for cyfluthrin_i everything is OK."
+# [1] "chem.snp.ewas.cyfluthrin_i.set1.txt" "chem.snp.ewas.cyfluthrin_i.set2.txt"
+# [3] "chem.snp.ewas.cyfluthrin_i.set4.txt"
+# 
+# [1] "the number of files is 3 for cyfluthrin_ii everything is OK."
+# [1] "chem.snp.ewas.cyfluthrin_ii.set1.txt"
+# [2] "chem.snp.ewas.cyfluthrin_ii.set2.txt"
+# [3] "chem.snp.ewas.cyfluthrin_ii.set4.txt"
+# 
+# [1] "the number of files is 3 for cyfluthrin_iii everything is OK."
+# [1] "chem.snp.ewas.cyfluthrin_iii.set1.txt"
+# [2] "chem.snp.ewas.cyfluthrin_iii.set2.txt"
+# [3] "chem.snp.ewas.cyfluthrin_iii.set4.txt"
+# 
+# [1] "the number of files is 3 for cyfluthrin_iv everything is OK."
+# [1] "chem.snp.ewas.cyfluthrin_iv.set1.txt"
+# [2] "chem.snp.ewas.cyfluthrin_iv.set2.txt"
+# [3] "chem.snp.ewas.cyfluthrin_iv.set4.txt"
+# 
+# [1] "the number of files is 3 for cypermethrin_i everything is OK."
+# [1] "chem.snp.ewas.cypermethrin_i.set1.txt"
+# [2] "chem.snp.ewas.cypermethrin_i.set2.txt"
+# [3] "chem.snp.ewas.cypermethrin_i.set4.txt"
+# 
+# [1] "the number of files is 3 for cypermethrin_ii everything is OK."
+# [1] "chem.snp.ewas.cypermethrin_ii.set1.txt"
+# [2] "chem.snp.ewas.cypermethrin_ii.set2.txt"
+# [3] "chem.snp.ewas.cypermethrin_ii.set4.txt"
+# 
+# [1] "the number of files is 3 for cypermethrin_iii everything is OK."
+# [1] "chem.snp.ewas.cypermethrin_iii.set1.txt"
+# [2] "chem.snp.ewas.cypermethrin_iii.set2.txt"
+# [3] "chem.snp.ewas.cypermethrin_iii.set4.txt"
+# 
+# [1] "the number of files is 3 for cypermethrin_iv everything is OK."
+# [1] "chem.snp.ewas.cypermethrin_iv.set1.txt"
+# [2] "chem.snp.ewas.cypermethrin_iv.set2.txt"
+# [3] "chem.snp.ewas.cypermethrin_iv.set4.txt"
+# 
+# [1] "the number of files is 3 for dacthal everything is OK."
+# [1] "chem.snp.ewas.dacthal.set1.txt" "chem.snp.ewas.dacthal.set2.txt"
+# [3] "chem.snp.ewas.dacthal.set4.txt"
+# 
+# [1] "the number of files is 3 for dde everything is OK."
+# [1] "chem.snp.ewas.dde.set1.txt" "chem.snp.ewas.dde.set2.txt"
+# [3] "chem.snp.ewas.dde.set4.txt"
+# 
+# [1] "the number of files is 3 for ddt everything is OK."
+# [1] "chem.snp.ewas.ddt.set1.txt" "chem.snp.ewas.ddt.set2.txt"
+# [3] "chem.snp.ewas.ddt.set4.txt"
+# 
+# [1] "the number of files is 3 for deltamethrin everything is OK."
+# [1] "chem.snp.ewas.deltamethrin.set1.txt" "chem.snp.ewas.deltamethrin.set2.txt"
+# [3] "chem.snp.ewas.deltamethrin.set4.txt"
+# 
+# [1] "the number of files is 3 for diazinon everything is OK."
+# [1] "chem.snp.ewas.diazinon.set1.txt" "chem.snp.ewas.diazinon.set2.txt"
+# [3] "chem.snp.ewas.diazinon.set4.txt"
+# 
+# [1] "the number of files is 3 for dibenzo_ae_pyrene everything is OK."
+# [1] "chem.snp.ewas.dibenzo_ae_pyrene.set1.txt"
+# [2] "chem.snp.ewas.dibenzo_ae_pyrene.set2.txt"
+# [3] "chem.snp.ewas.dibenzo_ae_pyrene.set4.txt"
+# 
+# [1] "the number of files is 3 for dibenzo_ah_anthracene everything is OK."
+# [1] "chem.snp.ewas.dibenzo_ah_anthracene.set1.txt"
+# [2] "chem.snp.ewas.dibenzo_ah_anthracene.set2.txt"
+# [3] "chem.snp.ewas.dibenzo_ah_anthracene.set4.txt"
+# 
+# [1] "the number of files is 3 for dicamba everything is OK."
+# [1] "chem.snp.ewas.dicamba.set1.txt" "chem.snp.ewas.dicamba.set2.txt"
+# [3] "chem.snp.ewas.dicamba.set4.txt"
+# 
+# [1] "the number of files is 2 for dicofol so only 2 sets will be used"
+# [1] "chem.snp.ewas.dicofol.set1.txt" "chem.snp.ewas.dicofol.set4.txt"
+# 
+# [1] "the number of files is 3 for dieldrin everything is OK."
+# [1] "chem.snp.ewas.dieldrin.set1.txt" "chem.snp.ewas.dieldrin.set2.txt"
+# [3] "chem.snp.ewas.dieldrin.set4.txt"
+# 
+# [1] "the number of files is 3 for dimethoate everything is OK."
+# [1] "chem.snp.ewas.dimethoate.set1.txt" "chem.snp.ewas.dimethoate.set2.txt"
+# [3] "chem.snp.ewas.dimethoate.set4.txt"
+# 
+# [1] "the number of files is 3 for endosulfan_beta everything is OK."
+# [1] "chem.snp.ewas.endosulfan_beta.set1.txt"
+# [2] "chem.snp.ewas.endosulfan_beta.set2.txt"
+# [3] "chem.snp.ewas.endosulfan_beta.set4.txt"
+# 
+# [1] "the number of files is 1 for ethafluralin and it should be 2 or 3"
+# [1] "chem.snp.ewas.ethafluralin.set1.txt"
+# 
+# [1] "the number of files is 3 for heptachlor everything is OK."
+# [1] "chem.snp.ewas.heptachlor.set1.txt" "chem.snp.ewas.heptachlor.set2.txt"
+# [3] "chem.snp.ewas.heptachlor.set4.txt"
+# 
+# [1] "the number of files is 3 for indeno_123_cd_pyrene everything is OK."
+# [1] "chem.snp.ewas.indeno_123_cd_pyrene.set1.txt"
+# [2] "chem.snp.ewas.indeno_123_cd_pyrene.set2.txt"
+# [3] "chem.snp.ewas.indeno_123_cd_pyrene.set4.txt"
+# 
+# [1] "the number of files is 3 for iprodione everything is OK."
+# [1] "chem.snp.ewas.iprodione.set1.txt" "chem.snp.ewas.iprodione.set2.txt"
+# [3] "chem.snp.ewas.iprodione.set4.txt"
+# 
+# [1] "the number of files is 3 for lindane everything is OK."
+# [1] "chem.snp.ewas.lindane.set1.txt" "chem.snp.ewas.lindane.set2.txt"
+# [3] "chem.snp.ewas.lindane.set4.txt"
+# 
+# [1] "the number of files is 3 for malathion everything is OK."
+# [1] "chem.snp.ewas.malathion.set1.txt" "chem.snp.ewas.malathion.set2.txt"
+# [3] "chem.snp.ewas.malathion.set4.txt"
+# 
+# [1] "the number of files is 3 for mcpa everything is OK."
+# [1] "chem.snp.ewas.mcpa.set1.txt" "chem.snp.ewas.mcpa.set2.txt"
+# [3] "chem.snp.ewas.mcpa.set4.txt"
+# 
+# [1] "the number of files is 3 for mcpp everything is OK."
+# [1] "chem.snp.ewas.mcpp.set1.txt" "chem.snp.ewas.mcpp.set2.txt"
+# [3] "chem.snp.ewas.mcpp.set4.txt"
+# 
+# [1] "the number of files is 1 for methidathion and it should be 2 or 3"
+# [1] "chem.snp.ewas.methidathion.set1.txt"
+# 
+# [1] "the number of files is 3 for methoprene everything is OK."
+# [1] "chem.snp.ewas.methoprene.set1.txt" "chem.snp.ewas.methoprene.set2.txt"
+# [3] "chem.snp.ewas.methoprene.set4.txt"
+# 
+# [1] "the number of files is 3 for methoxychlor everything is OK."
+# [1] "chem.snp.ewas.methoxychlor.set1.txt" "chem.snp.ewas.methoxychlor.set2.txt"
+# [3] "chem.snp.ewas.methoxychlor.set4.txt"
+# 
+# [1] "the number of files is 3 for methyl_parathion everything is OK."
+# [1] "chem.snp.ewas.methyl_parathion.set1.txt"
+# [2] "chem.snp.ewas.methyl_parathion.set2.txt"
+# [3] "chem.snp.ewas.methyl_parathion.set4.txt"
+# 
+# [1] "the number of files is 1 for metolachlor and it should be 2 or 3"
+# [1] "chem.snp.ewas.metolachlor.set1.txt"
+# 
+# [1] "the number of files is 3 for nicotine everything is OK."
+# [1] "chem.snp.ewas.nicotine.set1.txt" "chem.snp.ewas.nicotine.set2.txt"
+# [3] "chem.snp.ewas.nicotine.set4.txt"
+# 
+# [1] "the number of files is 3 for o_phenyl_phenol everything is OK."
+# [1] "chem.snp.ewas.o_phenyl_phenol.set1.txt"
+# [2] "chem.snp.ewas.o_phenyl_phenol.set2.txt"
+# [3] "chem.snp.ewas.o_phenyl_phenol.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_105 everything is OK."
+# [1] "chem.snp.ewas.pcb_105.set1.txt" "chem.snp.ewas.pcb_105.set2.txt"
+# [3] "chem.snp.ewas.pcb_105.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_118 everything is OK."
+# [1] "chem.snp.ewas.pcb_118.set1.txt" "chem.snp.ewas.pcb_118.set2.txt"
+# [3] "chem.snp.ewas.pcb_118.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_138 everything is OK."
+# [1] "chem.snp.ewas.pcb_138.set1.txt" "chem.snp.ewas.pcb_138.set2.txt"
+# [3] "chem.snp.ewas.pcb_138.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_153 everything is OK."
+# [1] "chem.snp.ewas.pcb_153.set1.txt" "chem.snp.ewas.pcb_153.set2.txt"
+# [3] "chem.snp.ewas.pcb_153.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_170 everything is OK."
+# [1] "chem.snp.ewas.pcb_170.set1.txt" "chem.snp.ewas.pcb_170.set2.txt"
+# [3] "chem.snp.ewas.pcb_170.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_180 everything is OK."
+# [1] "chem.snp.ewas.pcb_180.set1.txt" "chem.snp.ewas.pcb_180.set2.txt"
+# [3] "chem.snp.ewas.pcb_180.set4.txt"
+# 
+# [1] "the number of files is 1 for pebulate and it should be 2 or 3"
+# [1] "chem.snp.ewas.pebulate.set1.txt"
+# 
+# [1] "the number of files is 3 for pendimethalin everything is OK."
+# [1] "chem.snp.ewas.pendimethalin.set1.txt"
+# [2] "chem.snp.ewas.pendimethalin.set2.txt"
+# [3] "chem.snp.ewas.pendimethalin.set4.txt"
+# 
+# [1] "the number of files is 3 for pentachlorophenol everything is OK."
+# [1] "chem.snp.ewas.pentachlorophenol.set1.txt"
+# [2] "chem.snp.ewas.pentachlorophenol.set2.txt"
+# [3] "chem.snp.ewas.pentachlorophenol.set4.txt"
+# 
+# [1] "the number of files is 3 for permethrin_cis everything is OK."
+# [1] "chem.snp.ewas.permethrin_cis.set1.txt"
+# [2] "chem.snp.ewas.permethrin_cis.set2.txt"
+# [3] "chem.snp.ewas.permethrin_cis.set4.txt"
+# 
+# [1] "the number of files is 3 for permethrin_trans everything is OK."
+# [1] "chem.snp.ewas.permethrin_trans.set1.txt"
+# [2] "chem.snp.ewas.permethrin_trans.set2.txt"
+# [3] "chem.snp.ewas.permethrin_trans.set4.txt"
+# 
+# [1] "the number of files is 3 for phorate everything is OK."
+# [1] "chem.snp.ewas.phorate.set1.txt" "chem.snp.ewas.phorate.set2.txt"
+# [3] "chem.snp.ewas.phorate.set4.txt"
+# 
+# [1] "the number of files is 3 for phosmet everything is OK."
+# [1] "chem.snp.ewas.phosmet.set1.txt" "chem.snp.ewas.phosmet.set2.txt"
+# [3] "chem.snp.ewas.phosmet.set4.txt"
+# 
+# [1] "the number of files is 3 for piperonyl_butoxide everything is OK."
+# [1] "chem.snp.ewas.piperonyl_butoxide.set1.txt"
+# [2] "chem.snp.ewas.piperonyl_butoxide.set2.txt"
+# [3] "chem.snp.ewas.piperonyl_butoxide.set4.txt"
+# 
+# [1] "the number of files is 1 for prometryn and it should be 2 or 3"
+# [1] "chem.snp.ewas.prometryn.set1.txt"
+# 
+# [1] "the number of files is 3 for propargite everything is OK."
+# [1] "chem.snp.ewas.propargite.set1.txt" "chem.snp.ewas.propargite.set2.txt"
+# [3] "chem.snp.ewas.propargite.set4.txt"
+# 
+# [1] "the number of files is 3 for propoxur everything is OK."
+# [1] "chem.snp.ewas.propoxur.set1.txt" "chem.snp.ewas.propoxur.set2.txt"
+# [3] "chem.snp.ewas.propoxur.set4.txt"
+# 
+# [1] "the number of files is 3 for simazine everything is OK."
+# [1] "chem.snp.ewas.simazine.set1.txt" "chem.snp.ewas.simazine.set2.txt"
+# [3] "chem.snp.ewas.simazine.set4.txt"
+# 
+# [1] "the number of files is 3 for tetramethrin_i everything is OK."
+# [1] "chem.snp.ewas.tetramethrin_i.set1.txt"
+# [2] "chem.snp.ewas.tetramethrin_i.set2.txt"
+# [3] "chem.snp.ewas.tetramethrin_i.set4.txt"
+# 
+# [1] "the number of files is 3 for tetramethrin_ii everything is OK."
+# [1] "chem.snp.ewas.tetramethrin_ii.set1.txt"
+# [2] "chem.snp.ewas.tetramethrin_ii.set2.txt"
+# [3] "chem.snp.ewas.tetramethrin_ii.set4.txt"
+# 
+# [1] "the number of files is 2 for tribufos so only 2 sets will be used"
+# [1] "chem.snp.ewas.tribufos.set1.txt" "chem.snp.ewas.tribufos.set4.txt"
+# 
+# [1] "the number of files is 3 for trifluralin everything is OK."
+# [1] "chem.snp.ewas.trifluralin.set1.txt" "chem.snp.ewas.trifluralin.set2.txt"
+# [3] "chem.snp.ewas.trifluralin.set4.txt"
+# 
+# [1] "the number of files is 3 for 4_d everything is OK."
+# [1] "chem.snp.ewas.4_d.set1.txt" "chem.snp.ewas.4_d.set2.txt"
+# [3] "chem.snp.ewas.4_d.set4.txt"
+# 
+# [1] "the number of files is 3 for as everything is OK."
+# [1] "chem.snp.ewas.as.set1.txt" "chem.snp.ewas.as.set2.txt"
+# [3] "chem.snp.ewas.as.set4.txt"
+# 
+# [1] "the number of files is 3 for cd everything is OK."
+# [1] "chem.snp.ewas.cd.set1.txt" "chem.snp.ewas.cd.set2.txt"
+# [3] "chem.snp.ewas.cd.set4.txt"
+# 
+# [1] "the number of files is 3 for cr everything is OK."
+# [1] "chem.snp.ewas.cr.set1.txt" "chem.snp.ewas.cr.set2.txt"
+# [3] "chem.snp.ewas.cr.set4.txt"
+# 
+# [1] "the number of files is 3 for cu everything is OK."
+# [1] "chem.snp.ewas.cu.set1.txt" "chem.snp.ewas.cu.set2.txt"
+# [3] "chem.snp.ewas.cu.set4.txt"
+# 
+# [1] "the number of files is 3 for pb everything is OK."
+# [1] "chem.snp.ewas.pb.set1.txt" "chem.snp.ewas.pb.set2.txt"
+# [3] "chem.snp.ewas.pb.set4.txt"
+# 
+# [1] "the number of files is 3 for ni everything is OK."
+# [1] "chem.snp.ewas.ni.set1.txt" "chem.snp.ewas.ni.set2.txt"
+# [3] "chem.snp.ewas.ni.set4.txt"
+# 
+# [1] "the number of files is 3 for sn everything is OK."
+# [1] "chem.snp.ewas.sn.set1.txt" "chem.snp.ewas.sn.set2.txt"
+# [3] "chem.snp.ewas.sn.set4.txt"
+# 
+# [1] "the number of files is 3 for w everything is OK."
+# [1] "chem.snp.ewas.w.set1.txt" "chem.snp.ewas.w.set2.txt"
+# [3] "chem.snp.ewas.w.set4.txt"
+# 
+# [1] "the number of files is 3 for zn everything is OK."
+# [1] "chem.snp.ewas.zn.set1.txt" "chem.snp.ewas.zn.set2.txt"
+# [3] "chem.snp.ewas.zn.set4.txt"
+# 
+# [1] "the number of files is 3 for pcb_all everything is OK."
+# [1] "chem.snp.ewas.pcb_all.set1.txt" "chem.snp.ewas.pcb_all.set2.txt"
+# [3] "chem.snp.ewas.pcb_all.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_28 everything is OK."
+# [1] "chem.snp.ewas.bde_28.set1.txt" "chem.snp.ewas.bde_28.set2.txt"
+# [3] "chem.snp.ewas.bde_28.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_47 everything is OK."
+# [1] "chem.snp.ewas.bde_47.set1.txt" "chem.snp.ewas.bde_47.set2.txt"
+# [3] "chem.snp.ewas.bde_47.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_99 everything is OK."
+# [1] "chem.snp.ewas.bde_99.set1.txt" "chem.snp.ewas.bde_99.set2.txt"
+# [3] "chem.snp.ewas.bde_99.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_100 everything is OK."
+# [1] "chem.snp.ewas.bde_100.set1.txt" "chem.snp.ewas.bde_100.set2.txt"
+# [3] "chem.snp.ewas.bde_100.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_153 everything is OK."
+# [1] "chem.snp.ewas.bde_153.set1.txt" "chem.snp.ewas.bde_153.set2.txt"
+# [3] "chem.snp.ewas.bde_153.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_154 everything is OK."
+# [1] "chem.snp.ewas.bde_154.set1.txt" "chem.snp.ewas.bde_154.set2.txt"
+# [3] "chem.snp.ewas.bde_154.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_183 everything is OK."
+# [1] "chem.snp.ewas.bde_183.set1.txt" "chem.snp.ewas.bde_183.set2.txt"
+# [3] "chem.snp.ewas.bde_183.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_196 everything is OK."
+# [1] "chem.snp.ewas.bde_196.set1.txt" "chem.snp.ewas.bde_196.set2.txt"
+# [3] "chem.snp.ewas.bde_196.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_197 everything is OK."
+# [1] "chem.snp.ewas.bde_197.set1.txt" "chem.snp.ewas.bde_197.set2.txt"
+# [3] "chem.snp.ewas.bde_197.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_203 everything is OK."
+# [1] "chem.snp.ewas.bde_203.set1.txt" "chem.snp.ewas.bde_203.set2.txt"
+# [3] "chem.snp.ewas.bde_203.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_206 everything is OK."
+# [1] "chem.snp.ewas.bde_206.set1.txt" "chem.snp.ewas.bde_206.set2.txt"
+# [3] "chem.snp.ewas.bde_206.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_207 everything is OK."
+# [1] "chem.snp.ewas.bde_207.set1.txt" "chem.snp.ewas.bde_207.set2.txt"
+# [3] "chem.snp.ewas.bde_207.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_208 everything is OK."
+# [1] "chem.snp.ewas.bde_208.set1.txt" "chem.snp.ewas.bde_208.set2.txt"
+# [3] "chem.snp.ewas.bde_208.set4.txt"
+# 
+# [1] "the number of files is 3 for bde_209 everything is OK."
+# [1] "chem.snp.ewas.bde_209.set1.txt" "chem.snp.ewas.bde_209.set2.txt"
+# [3] "chem.snp.ewas.bde_209.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_28 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_28.set1.txt" "chem.snp.ewas.dl_bde_28.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_28.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_47 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_47.set1.txt" "chem.snp.ewas.dl_bde_47.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_47.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_99 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_99.set1.txt" "chem.snp.ewas.dl_bde_99.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_99.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_100 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_100.set1.txt" "chem.snp.ewas.dl_bde_100.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_100.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_153 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_153.set1.txt" "chem.snp.ewas.dl_bde_153.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_153.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_154 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_154.set1.txt" "chem.snp.ewas.dl_bde_154.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_154.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_183 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_183.set1.txt" "chem.snp.ewas.dl_bde_183.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_183.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_196 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_196.set1.txt" "chem.snp.ewas.dl_bde_196.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_196.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_197 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_197.set1.txt" "chem.snp.ewas.dl_bde_197.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_197.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_203 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_203.set1.txt" "chem.snp.ewas.dl_bde_203.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_203.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_206 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_206.set1.txt" "chem.snp.ewas.dl_bde_206.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_206.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_207 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_207.set1.txt" "chem.snp.ewas.dl_bde_207.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_207.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_208 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_208.set1.txt" "chem.snp.ewas.dl_bde_208.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_208.set4.txt"
+# 
+# [1] "the number of files is 3 for dl_bde_209 everything is OK."
+# [1] "chem.snp.ewas.dl_bde_209.set1.txt" "chem.snp.ewas.dl_bde_209.set2.txt"
+# [3] "chem.snp.ewas.dl_bde_209.set4.txt"
+
+## non paralleled version, lame
+
+#####
+for(chemical in all.scan.chemical){
+  
+  #chemical = "Hexadecadienoic_acid"
+  file.list.subs = list.files()[grepl(paste0("chem.snp.ewas.",chemical,".set"),list.files())] %>% sort
+  
+  if(length(file.list.subs)==1 | length(file.list.subs)>3){
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " and it should be 2 or 3"))
+    print(file.list.subs)
+    next
+  }
+  
+  if(length(file.list.subs)==2){
+    print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " so only 2 sets will be used"))
+
+    set.file1 = str_sub(file.list.subs[1],-8,-5)  
+    file1 = fread(file.list.subs[1]) %>%
+      filter(!is.na(P)) %>%
+      dplyr::rename( !!paste0("coef.", set.file1) := Beta,
+                     !!paste0("se.", set.file1) := SE, 
+                     !!paste0("p.", set.file1) := P,
+                     !!paste0("n.", set.file1) := N,
+                     !!paste0("snp.", set.file1) := snp)
+    
+    set.file2 = str_sub(file.list.subs[2],-8,-5)  
+    file2 = fread(file.list.subs[2])%>%
+      filter(!is.na(P)) %>%
+      dplyr::rename( !!paste0("coef.", set.file2) := Beta,
+                     !!paste0("se.", set.file2) := SE, 
+                     !!paste0("p.", set.file2) := P,
+                     !!paste0("n.", set.file2) := N,
+                     !!paste0("snp.", set.file2) := snp)
+  
+    dat <- file1 %>% 
+      full_join(file2, by ="CpG") %>%
+      data.frame()
+  
+    studies <- c(set.file1,set.file2)
+  
+  }
+
+  if(length(file.list.subs)==3){
+    
+  print(paste0("the number of files is ",length(file.list.subs), " for ",chemical, " everything is OK."))
+    
+  set.file1 = str_sub(file.list.subs[1],-8,-5)  
+  file1 = fread(file.list.subs[1]) %>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file1) := Beta,
+                   !!paste0("se.", set.file1) := SE, 
+                   !!paste0("p.", set.file1) := P,
+                   !!paste0("n.", set.file1) := N,
+                   !!paste0("snp.", set.file1) := snp)
+  
+  set.file2 = str_sub(file.list.subs[2],-8,-5)  
+  file2 = fread(file.list.subs[2])%>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file2) := Beta,
+                   !!paste0("se.", set.file2) := SE, 
+                   !!paste0("p.", set.file2) := P,
+                   !!paste0("n.", set.file2) := N,
+                   !!paste0("snp.", set.file2) := snp)
+
+  
+  set.file3 = str_sub(file.list.subs[3],-8,-5)  
+  file3 = fread(file.list.subs[3])%>%
+    filter(!is.na(P)) %>%
+    dplyr::rename( !!paste0("coef.", set.file3) := Beta,
+                   !!paste0("se.", set.file3) := SE, 
+                   !!paste0("p.", set.file3) := P,
+                   !!paste0("n.", set.file3) := N,
+                   !!paste0("snp.", set.file3) := snp)
+
+  dat <- file1 %>% 
+    full_join(file2, by ="CpG") %>%
+    full_join(file3, by ="CpG")  %>%
+    data.frame()
+
+  studies <- c(set.file1,set.file2,set.file3)
+  
+  }
+
+  meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+  dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+  
+  fwrite(dat, paste0("~/ewas/chemicallomicis/meta/chemical.snp.ewas.",chemical,".meta.txt"))
+  
+  }
+
+
+```
+
+```{r meta-analysis of pcb_all from 3 sets}
+
+setwd("~/ewas/pesticides/pcb_all")
+library(tidyverse)
+library(data.table)
+library(metafor)
+library(reshape)
+
+fixed.effects.meta.analysis <- function(list.of.studies,data){
+                              require(metafor)
+                              coefs = data[,c("CpG",paste0("coef.",list.of.studies))]
+                              ses = data[,c("CpG",paste0("se.",list.of.studies))]
+                              require(reshape)
+                              coefs = melt(coefs)
+                              names(coefs) <- c("CpG","set","coef")
+                              ses = melt(ses)
+                              data.long = cbind(coefs,ses[,"value"])
+                              names(data.long)<-c("CpG","set","coef","se")
+                              res = split(data.long, f=data$CpG)
+                              res = lapply(res, function(x) rma.uni(slab=x$study,
+                                                                    yi=x$coef,
+                                                                    sei=x$se,
+                                                                    method="FE",
+                                                                    weighted=TRUE))
+                              res
+                              }
+
+extract.and.merge.meta.analysis <-function(meta.res,data){
+                                  require(plyr)
+                                  data.meta = ldply(lapply(meta.res, function(x)
+                                    unlist(c(x$b[[1]],x[c("se","pval","k","QE","QEp","I2","H2")]))))
+                                  colnames(data.meta)<-c("CpG","coef.fe","se.fe","p.fe","set_nums",
+                                                         "q.fe","het.p.fe","i2.fe","h2.fe")
+                                  data = merge(data,data.meta,by="CpG",all.x=T)
+                                  data
+                                  }
+
+chemical = "pcb_all"
+
+#file.list.subs = list.files() 
+
+############################################################
+# without including PCs
+
+set.file1 = "set1"
+race.file1 = "white"
+label.file1 = paste0(set.file1,".",race.file1)
+file1 = fread(paste0(race.file1,".snp.ewas.pcb_all.",set.file1,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file1) := Beta,
+                 !!paste0("se.", label.file1) := SE, 
+                 !!paste0("p.", label.file1) := P,
+                 !!paste0("n.", label.file1) := N,
+                 !!paste0("snp.", label.file1) := snp)
+
+set.file2 = "set2"
+race.file2 = "white"
+label.file2 = paste0(set.file2,".",race.file2)
+file2 = fread(paste0(race.file2,".snp.ewas.pcb_all.",set.file2,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file2) := Beta,
+                 !!paste0("se.", label.file2) := SE, 
+                 !!paste0("p.", label.file2) := P,
+                 !!paste0("n.", label.file2) := N,
+                 !!paste0("snp.", label.file2) := snp)
+
+set.file3 = "set4"
+race.file3 = "white"
+label.file3 = paste0(set.file3,".",race.file3)
+file3 = fread(paste0(race.file3,".snp.ewas.pcb_all.",set.file3,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file3) := Beta,
+                 !!paste0("se.", label.file3) := SE, 
+                 !!paste0("p.", label.file3) := P,
+                 !!paste0("n.", label.file3) := N,
+                 !!paste0("snp.", label.file3) := snp)
+
+set.file4 = "set1"
+race.file4 = "latino"
+label.file4 = paste0(set.file4,".",race.file4)
+file4 = fread(paste0(race.file4,".snp.ewas.pcb_all.",set.file4,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file4) := Beta,
+                 !!paste0("se.", label.file4) := SE, 
+                 !!paste0("p.", label.file4) := P,
+                 !!paste0("n.", label.file4) := N,
+                 !!paste0("snp.", label.file4) := snp)
+
+set.file5 = "set2"
+race.file5 = "latino"
+label.file5 = paste0(set.file5,".",race.file5)
+file5 = fread(paste0(race.file5,".snp.ewas.pcb_all.",set.file5,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file5) := Beta,
+                 !!paste0("se.", label.file5) := SE, 
+                 !!paste0("p.", label.file5) := P,
+                 !!paste0("n.", label.file5) := N,
+                 !!paste0("snp.", label.file5) := snp)
+
+set.file6 = "set4"
+race.file6 = "latino"
+label.file6 = paste0(set.file6,".",race.file6)
+file6 = fread(paste0(race.file6,".snp.ewas.pcb_all.",set.file6,".txt")) %>%
+  filter(!is.na(P)) %>%
+  dplyr::rename( !!paste0("coef.", label.file6) := Beta,
+                 !!paste0("se.", label.file6) := SE, 
+                 !!paste0("p.", label.file6) := P,
+                 !!paste0("n.", label.file6) := N,
+                 !!paste0("snp.", label.file6) := snp)
+
+## white and latino combined
+dat <- file1 %>% 
+  full_join(file2, by ="CpG") %>%
+  full_join(file3, by ="CpG")  %>%
+  full_join(file4, by ="CpG")  %>%
+  full_join(file5, by ="CpG")  %>%
+  full_join(file6, by ="CpG")  %>%
+  data.frame()
+
+studies <- c(label.file1,
+             label.file2,
+             label.file3,
+             label.file4,
+             label.file5,
+             label.file6)
+
+meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+
+fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/wAndL.chem.snp.ewas.pcb_all.meta.txt"))
+
+## white
+dat <- file1 %>% 
+  full_join(file2, by ="CpG") %>%
+  full_join(file3, by ="CpG") %>%
+  data.frame()
+
+studies <- c(label.file1,
+             label.file2,
+             label.file3)
+
+meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+
+fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/white.chem.snp.ewas.pcb_all.meta.txt"))
+
+## white and latino combined
+dat <- file4 %>% 
+  full_join(file5, by ="CpG")  %>%
+  full_join(file6, by ="CpG")  %>%
+  data.frame()
+
+studies <- c(label.file4,
+             label.file5,
+             label.file6)
+
+meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+
+fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/latino.chem.snp.ewas.pcb_all.meta.txt"))
+
+
+############################################################
+# including 5 PCs
+
+# set.file1 = "set1"
+# race.file1 = "white"
+# label.file1 = paste0(set.file1,".",race.file1)
+# file1 = fread(paste0(race.file1,".5pc.snp.ewas.pcb_all.",set.file1,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file1) := Beta,
+#                  !!paste0("se.", label.file1) := SE, 
+#                  !!paste0("p.", label.file1) := P,
+#                  !!paste0("n.", label.file1) := N,
+#                  !!paste0("snp.", label.file1) := snp)
+# 
+# set.file2 = "set2"
+# race.file2 = "white"
+# label.file2 = paste0(set.file2,".",race.file2)
+# file2 = fread(paste0(race.file2,".5pc.snp.ewas.pcb_all.",set.file2,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file2) := Beta,
+#                  !!paste0("se.", label.file2) := SE, 
+#                  !!paste0("p.", label.file2) := P,
+#                  !!paste0("n.", label.file2) := N,
+#                  !!paste0("snp.", label.file2) := snp)
+# 
+# set.file3 = "set4"
+# race.file3 = "white"
+# label.file3 = paste0(set.file3,".",race.file3)
+# file3 = fread(paste0(race.file3,".5pc.snp.ewas.pcb_all.",set.file3,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file3) := Beta,
+#                  !!paste0("se.", label.file3) := SE, 
+#                  !!paste0("p.", label.file3) := P,
+#                  !!paste0("n.", label.file3) := N,
+#                  !!paste0("snp.", label.file3) := snp)
+# 
+# set.file4 = "set1"
+# race.file4 = "latino"
+# label.file4 = paste0(set.file4,".",race.file4)
+# file4 = fread(paste0(race.file4,".5pc.snp.ewas.pcb_all.",set.file4,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file4) := Beta,
+#                  !!paste0("se.", label.file4) := SE, 
+#                  !!paste0("p.", label.file4) := P,
+#                  !!paste0("n.", label.file4) := N,
+#                  !!paste0("snp.", label.file4) := snp)
+# 
+# set.file5 = "set2"
+# race.file5 = "latino"
+# label.file5 = paste0(set.file5,".",race.file5)
+# file5 = fread(paste0(race.file5,".5pc.snp.ewas.pcb_all.",set.file5,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file5) := Beta,
+#                  !!paste0("se.", label.file5) := SE, 
+#                  !!paste0("p.", label.file5) := P,
+#                  !!paste0("n.", label.file5) := N,
+#                  !!paste0("snp.", label.file5) := snp)
+# 
+# set.file6 = "set4"
+# race.file6 = "latino"
+# label.file6 = paste0(set.file6,".",race.file6)
+# file6 = fread(paste0(race.file6,".5pc.snp.ewas.pcb_all.",set.file6,".txt")) %>%
+#   filter(!is.na(P)) %>%
+#   dplyr::rename( !!paste0("coef.", label.file6) := Beta,
+#                  !!paste0("se.", label.file6) := SE, 
+#                  !!paste0("p.", label.file6) := P,
+#                  !!paste0("n.", label.file6) := N,
+#                  !!paste0("snp.", label.file6) := snp)
+# 
+# ## white and latino combined
+# dat <- file1 %>% 
+#   full_join(file2, by ="CpG") %>%
+#   full_join(file3, by ="CpG")  %>%
+#   full_join(file4, by ="CpG")  %>%
+#   full_join(file5, by ="CpG")  %>%
+#   full_join(file6, by ="CpG")  %>%
+#   data.frame()
+# 
+# studies <- c(label.file1,
+#              label.file2,
+#              label.file3,
+#              label.file4,
+#              label.file5,
+#              label.file6)
+# 
+# meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+# dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+# 
+# fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/wAndL.chem.5pc.snp.ewas.pcb_all.meta.txt"))
+# 
+# ## white
+# dat <- file1 %>% 
+#   full_join(file2, by ="CpG") %>%
+#   full_join(file3, by ="CpG") %>%
+#   data.frame()
+# 
+# studies <- c(label.file1,
+#              label.file2,
+#              label.file3)
+# 
+# meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+# dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+# 
+# fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/white.chem.5pc.snp.ewas.pcb_all.meta.txt"))
+# 
+# ## white and latino combined
+# dat <- file4 %>% 
+#   full_join(file5, by ="CpG")  %>%
+#   full_join(file6, by ="CpG")  %>%
+#   data.frame()
+# 
+# studies <- c(label.file4,
+#              label.file5,
+#              label.file6)
+# 
+# meta.results <- fixed.effects.meta.analysis(list.of.studies = studies, data = dat)
+# dat <- extract.and.merge.meta.analysis(meta.res = meta.results, data = dat)
+# 
+# fwrite(dat, paste0("~/ewas/pesticides/pcb_all_meta/latino.chem.5pc.snp.ewas.pcb_all.meta.txt"))
+
+```
+
+```{r annotate the results and pathways analysis}
+########################################################
+setwd("~/ewas/pesticides/meta_anno")
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(foreach)
+
+n.cores <- parallel::detectCores() - 1
+print(n.cores)
+#n.cores = 20
+
+my.cluster <- parallel::makeCluster(
+  n.cores, 
+  type = "FORK")
+print(my.cluster)
+doParallel::registerDoParallel(cl = my.cluster)
+print(foreach::getDoParRegistered())
+print(foreach::getDoParWorkers())
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group) 
+
+metabo = fread("~/ewas/pesticides/totalChems.sets124.txt")%>%
+  as.data.frame() %>%
+  dplyr::filter(detection==0)%>%
+  column_to_rownames(var="chemicals") %>%
+  dplyr::select(-V1,-detection)%>%
+  t %>%
+  as.data.frame %>%
+  rownames_to_column(var="subjectId")
+
+files = list.files("~/ewas/pesticides/meta")
+
+x =  foreach(
+    i = files,
+    .combine=rbind
+    ) %dopar% {
+    
+    #i="chem.snp.ewas.pcb_all.meta.txt"
+    a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+
+    raw_0 = fread(paste0("~/ewas/pesticides/meta/",i)) %>%
+      dplyr::filter(grepl('cg', CpG)) %>%
+      dplyr::select(CpG,coef.fe,se.fe,p.fe,set_nums,q.fe,het.p.fe,i2.fe,h2.fe) %>%
+      left_join(annoEPIC,by=c("CpG"="cpg"))%>%
+      dplyr::filter(Probe_maf<0.05|is.na(Probe_maf), chr!="chrX"&chr!="chrY") %>%
+      mutate(fdr=p.adjust(p.fe, method = "fdr", n=length(p.fe))) %>%
+      mutate(bf=p.adjust(p.fe, method = "bonferroni", n=length(p.fe))) %>%
+      arrange(p.fe)
+    
+    fwrite(raw_0, paste0("chem.snp.ewas.",a0,".meta.anno.txt"))
+    
+    raw_gene =   raw_0 %>%
+        mutate(geneName=gsub(";.*","",UCSC_RefGene_Name)) %>%
+        filter(geneName!="") %>%
+        dplyr::select(geneName) %>%
+        as.data.frame() 
+    
+    a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+    if(a0 %in% colnames(metabo)){
+      a1 = metabo[,a0] %>% na.omit() %>% var()
+    }else{
+      a1=NA
+    }
+    a2 = dim(raw_0%>%filter(bf<0.05))[1]  
+    a3 = dim(raw_0%>%filter(fdr<0.05))[1]
+    a4 = raw_gene[1:20,1] %>% paste(., sep=" ", collapse=",")
+    
+    data.frame(chemical=a0, variance=a1,num.sig.bf=a2, num.sig.fdr=a3,sig.genes.20=a4)
+  }
+
+
+fwrite(x,"chem.initial.summary.txt")
+write.csv(x,"~/ewas/pesticides/chem.initial.summary.csv")
+
+parallel::stopCluster(cl = my.cluster)
+
+######################################################## 
+## significant pathways for significant hits for each metabolite (bonferroni)
+setwd("~/ewas/pesticides/pathways_bf")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+files = list.files("~/ewas/pesticides/meta")
+
+df_tmp = list()
+j =1 
+for(i in files){
+  
+  #i="chem.snp.ewas.pcb_all.meta.txt"
+  a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+  raw_100 = fread(paste0("~/ewas/pesticides/meta_anno/chem.snp.ewas.",a0,".meta.anno.txt")) %>%
+    #filter(bf<0.5)%>%
+    filter(fdr<0.5)%>%
+    #mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=bf) %>%
+    mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=fdr) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+
+  raw_100_vec = as.numeric(raw_100$p_val)
+  # P=0 is not accepted. so replace 0 into min/100
+  raw_100_vec[which(raw_100_vec==0)] = min(raw_100_vec[-which(raw_100_vec==0)])/100
+  names(raw_100_vec) = raw_100$cpg_name
+
+  if(length(raw_100_vec)>300){
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO")
+  }else{
+  res1 = methylglm(cpg.pval = raw_100_vec, minsize =10, GS.type = "KEGG")
+  res2 = methylglm(cpg.pval = raw_100_vec, minsize =50, GS.type = "GO")
+  }
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+  
+  write.csv(res_total,paste0("sig.pathways.kegg.go.",a0,".csv"))
+  
+  a1 = nrow(res1%>%filter(pvalue<0.05))
+  if(a1==0){
+    a2 = "none"}else{
+    a2 =  res1[1:a1,"Description"] %>% paste(., sep=" ", collapse=";")    
+    }
+     
+  a3 = nrow(res2%>%filter(pvalue<0.05))
+  if(a3==0){
+    a4 = "none"}else{
+    a4 =  res2[1:a3,"Description"] %>% paste(., sep=" ", collapse="; ")    
+    }
+    
+  df_tmp[[j]] = data.frame(chemical=a0, kegg_n=a1,kegg_terms=a2, go_n=a3,go_terms=a4)
+  j = j +1
+  
+  }
+
+df_pathway = do.call(rbind,df_tmp) %>%
+  as.data.frame() 
+colnames(df_pathway) = c("chemical","kegg_n","kegg_terms","go_n","go_terms")  
+
+write.csv(df_pathway,"~/ewas/pesticides/chem.pathway.summary.csv")
+
+########################################################
+setwd("~/ewas/pesticides")
+## output number of probes from each set for a metabilite for illustration
+#demo = fread(paste0("~/ewas/pesticides/meta/",files[1]))
+#table(demo$set_num)
+
+## plot relation between number of significant hits and metabolite variance
+x = fread("chem.initial.summary.txt")
+plot(x$variance,x$num.sig.fdr)
+
+```
+
+```{r annotation and pathway analysis for pcb by race}
+########################################################
+setwd("~/ewas/pesticides/pcb_all_meta_anno")
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group) 
+
+metabo = fread("~/ewas/pesticides/totalChems.sets124.txt")%>%
+  as.data.frame() %>%
+  dplyr::filter(detection==0)%>%
+  column_to_rownames(var="chemicals") %>%
+  dplyr::select(-V1,-detection)%>%
+  t %>%
+  as.data.frame %>%
+  rownames_to_column(var="subjectId")
+
+########################################################
+# version without PCs
+#files = list.files("~/ewas/pesticides/pcb_all_meta")
+files = c("white.chem.snp.ewas.pcb_all.meta.txt",
+          "latino.chem.snp.ewas.pcb_all.meta.txt",
+          "wAndL.chem.snp.ewas.pcb_all.meta.txt")
+
+x =  for(i in files){
+    
+    #i="wAndL.chem.snp.ewas.pcb_all.meta.txt"
+    a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+
+    raw_0 = fread(paste0("~/ewas/pesticides/pcb_all_meta/",i)) %>%
+      dplyr::filter(grepl('cg', CpG)) %>%
+      dplyr::select(CpG,coef.fe,se.fe,p.fe,set_nums,q.fe,het.p.fe,i2.fe,h2.fe) %>%
+      left_join(annoEPIC,by=c("CpG"="cpg"))%>%
+      dplyr::filter(Probe_maf<0.05|is.na(Probe_maf), chr!="chrX"&chr!="chrY") %>%
+      mutate(fdr=p.adjust(p.fe, method = "fdr", n=length(p.fe))) %>%
+      mutate(bf=p.adjust(p.fe, method = "bonferroni", n=length(p.fe))) %>%
+      arrange(p.fe)
+    
+    fwrite(raw_0, paste0("chem.snp.ewas.",a0,".meta.anno.txt"))
+    
+    raw_gene =   raw_0 %>%
+        mutate(geneName=gsub(";.*","",UCSC_RefGene_Name)) %>%
+        filter(geneName!="") %>%
+        dplyr::select(geneName) %>%
+        as.data.frame() 
+    
+    a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+    if(a0 %in% colnames(metabo)){
+      a1 = metabo[,a0] %>% na.omit() %>% var()
+    }else{
+      a1=NA
+    }
+    a2 = dim(raw_0%>%filter(bf<0.05))[1]  
+    a3 = dim(raw_0%>%filter(fdr<0.05))[1]
+    a4 = raw_gene[1:20,1] %>% paste(., sep=" ", collapse=",")
+    
+    
+    }
+
+## significant pathways for significant hits
+setwd("~/ewas/pesticides/pcb_all_pathways_bf")
+library(tidyverse)
+library(data.table)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+files = c("white.chem.snp.ewas.pcb_all.meta.txt",
+          "latino.chem.snp.ewas.pcb_all.meta.txt",
+          "wAndL.chem.snp.ewas.pcb_all.meta.txt")
+
+df_tmp = list()
+j =1 
+for(i in files){
+  
+  #i="chem.snp.ewas.pcb_all.meta.txt"
+  a0 = sub("chem.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+  raw_100 = fread(paste0("~/ewas/pesticides/pcb_all_meta_anno/chem.snp.ewas.",a0,".meta.anno.txt")) %>%
+    #filter(bf<0.5)%>%
+    filter(fdr<0.5)%>%
+    #mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=bf) %>%
+    mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=fdr) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+
+  raw_100_vec = as.numeric(raw_100$p_val)
+  # P=0 is not accepted. so replace 0 into min/100
+  raw_100_vec[which(raw_100_vec==0)] = min(raw_100_vec[-which(raw_100_vec==0)])/100
+  names(raw_100_vec) = raw_100$cpg_name
+
+  if(length(raw_100_vec)>300){
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO")
+  }else{
+  res1 = methylglm(cpg.pval = raw_100_vec, minsize =10, GS.type = "KEGG")
+  res2 = methylglm(cpg.pval = raw_100_vec, minsize =50, GS.type = "GO")
+  }
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+  
+  write.csv(res_total,paste0("sig.pathways.kegg.go.",a0,".csv"))
+  
+  a1 = nrow(res1%>%filter(pvalue<0.05))
+  if(a1==0){
+    a2 = "none"}else{
+    a2 =  res1[1:a1,"Description"] %>% paste(., sep=" ", collapse=";")    
+    }
+     
+  a3 = nrow(res2%>%filter(pvalue<0.05))
+  if(a3==0){
+    a4 = "none"}else{
+    a4 =  res2[1:a3,"Description"] %>% paste(., sep=" ", collapse="; ")    
+    }
+    
+  ####### nonparallelized version
+  df_tmp[[j]] = data.frame(chemical=a0, kegg_n=a1,kegg_terms=a2, go_n=a3,go_terms=a4)
+  j = j +1
+  
+  }
+
+df_pathway = do.call(rbind,df_tmp) %>%
+  as.data.frame() 
+colnames(df_pathway) = c("chemical","kegg_n","kegg_terms","go_n","go_terms")  
+
+write.csv(df_pathway,"~/ewas/pesticides/pcb_all.by.race.pathway.summary.csv")
+
+
+########################################################
+# version with 5 PCs
+# files = c("white.chem.5pc.snp.ewas.pcb_all.meta.txt",
+#           "latino.chem.5pc.snp.ewas.pcb_all.meta.txt",
+#           "wAndL.chem.5pc.snp.ewas.pcb_all.meta.txt")
+# 
+# x =  for(i in files){
+#     
+#     #i="white.chem.5pc.snp.ewas.pcb_all.meta.txt"
+#     a0 = sub("chem.5pc.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+# 
+#     raw_0 = fread(paste0("~/ewas/pesticides/pcb_all_meta/",i)) %>%
+#       dplyr::filter(grepl('cg', CpG)) %>%
+#       dplyr::select(CpG,coef.fe,se.fe,p.fe,set_nums,q.fe,het.p.fe,i2.fe,h2.fe) %>%
+#       left_join(annoEPIC,by=c("CpG"="cpg"))%>%
+#       dplyr::filter(Probe_maf<0.05|is.na(Probe_maf), chr!="chrX"&chr!="chrY") %>%
+#       mutate(fdr=p.adjust(p.fe, method = "fdr", n=length(p.fe))) %>%
+#       mutate(bf=p.adjust(p.fe, method = "bonferroni", n=length(p.fe))) %>%
+#       arrange(p.fe)
+#     
+#     fwrite(raw_0, paste0("chem.5pc.snp.ewas.",a0,".meta.anno.txt"))
+#     
+#     raw_gene =   raw_0 %>%
+#         mutate(geneName=gsub(";.*","",UCSC_RefGene_Name)) %>%
+#         filter(geneName!="") %>%
+#         dplyr::select(geneName) %>%
+#         as.data.frame() 
+#     
+#     a0 = sub("chem.5pc.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+#     if(a0 %in% colnames(metabo)){
+#       a1 = metabo[,a0] %>% na.omit() %>% var()
+#     }else{
+#       a1=NA
+#     }
+#     a2 = dim(raw_0%>%filter(bf<0.05))[1]  
+#     a3 = dim(raw_0%>%filter(fdr<0.05))[1]
+#     a4 = raw_gene[1:20,1] %>% paste(., sep=" ", collapse=",")
+#     print(a1,a2,a3,a4)
+#     
+#     }
+# 
+# ## significant pathways for significant hits
+# setwd("~/ewas/pesticides/pcb_all_pathways_bf")
+# library(tidyverse)
+# library(data.table)
+# library(methylGSA)
+# library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+# library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+# 
+# files = c("white.chem.5pc.snp.ewas.pcb_all.meta.txt",
+#           "latino.chem.5pc.snp.ewas.pcb_all.meta.txt",
+#           "wAndL.chem.5pc.snp.ewas.pcb_all.meta.txt")
+# 
+# df_tmp = list()
+# j =1 
+# for(i in files){
+#   
+#   #i="white.chem.5pc.snp.ewas.pcb_all.meta.txt"
+#   a0 = sub("chem.5pc.snp.ewas.","",i) %>%  sub(".meta.txt","",.)
+#   raw_100 = fread(paste0("~/ewas/pesticides/pcb_all_meta_anno/chem.snp.ewas.",a0,".meta.anno.txt")) %>%
+#     #filter(bf<0.5)%>%
+#     filter(fdr<0.5)%>%
+#     #mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=bf) %>%
+#     mutate(cpg_name=CpG,estimate=coef.fe,std_error=se.fe,p_val=fdr) %>%
+#     dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val)
+# 
+#   raw_100_vec = as.numeric(raw_100$p_val)
+#   # P=0 is not accepted. so replace 0 into min/100
+#   raw_100_vec[which(raw_100_vec==0)] = min(raw_100_vec[-which(raw_100_vec==0)])/100
+#   names(raw_100_vec) = raw_100$cpg_name
+# 
+#   if(length(raw_100_vec)>300){
+#   res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG")
+#   res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO")
+#   }else{
+#   res1 = methylglm(cpg.pval = raw_100_vec, minsize =10, GS.type = "KEGG")
+#   res2 = methylglm(cpg.pval = raw_100_vec, minsize =50, GS.type = "GO")
+#   }
+#   
+#   res1$term = "KEGG"
+#   res2$term = "GO"
+#   res_total = rbind(res1%>%filter(pvalue<0.05),
+#                     res2%>%filter(pvalue<0.05)) %>%
+#     as.data.frame()
+#   
+#   write.csv(res_total,paste0("sig.pathways.kegg.go.",a0,".5pc.csv"))
+#   
+#   a1 = nrow(res1%>%filter(pvalue<0.05))
+#   if(a1==0){
+#     a2 = "none"}else{
+#     a2 =  res1[1:a1,"Description"] %>% paste(., sep=" ", collapse=";")    
+#     }
+#      
+#   a3 = nrow(res2%>%filter(pvalue<0.05))
+#   if(a3==0){
+#     a4 = "none"}else{
+#     a4 =  res2[1:a3,"Description"] %>% paste(., sep=" ", collapse="; ")    
+#     }
+#     
+#   df_tmp[[j]] = data.frame(chemical=a0, kegg_n=a1,kegg_terms=a2, go_n=a3,go_terms=a4)
+#   j = j +1
+#   
+#   }
+# 
+# df_pathway = do.call(rbind,df_tmp) %>%
+#   as.data.frame() 
+# colnames(df_pathway) = c("chemical","kegg_n","kegg_terms","go_n","go_terms")  
+# 
+# write.csv(df_pathway,"~/ewas/pesticides/pcb_all.5pc.by.race.pathway.summary.csv")
+
+```
+
+# DMR analysis
+https://academic.oup.com/bioinformatics/article/37/5/711/5893553
+https://rdrr.io/bioc/ENmix/man/ipdmr.html
+
+```{r dmr analysis for all chemicals}
+
+setwd("~/ewas/pesticides/dmr")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+for(file in list.files("~/ewas/pesticides/meta")){
+  
+  #file = "chem.snp.ewas.pcb_all.meta.txt"
+  raw = fread(paste0("~/ewas/pesticides/meta/",file)) 
+  raw1 = raw %>%
+    dplyr::rename("probe"="CpG") %>%
+    mutate(p = p.fe) %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  if(length(which(raw1$p==0))!=0) raw1$p[which(raw1$p==0)] = min(raw1$p[-which(raw1$p==0)])/100
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=TRUE,
+        mht_plot=FALSE)
+  
+  file.figure = sub("chem.snp.ewas.","",file) %>% sub(".txt","",.)
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(file.figure,"_region_plot.pdf"))
+  } else {
+   cat("plotting seems to have failed")
+  }
+  
+  dmr = read.csv("resu_ipdmr.csv") %>%
+    filter(nprobe>1)
+  
+  comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field="end",
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  
+  if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+  try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+      silent=TRUE)
+  }
+  
+  if(exists("comb_p_GR_DF")){
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+  
+    betasAll = raw %>%
+      filter(!is.na(p.fe))%>%
+      mutate(Beta = coef.fe) %>%
+      dplyr::select(CpG,Beta) %>%
+      left_join(annoEPIC,by=c("CpG"="probe")) %>%
+      arrange(chr,start)%>%
+      na.omit()
+  
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Beta))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    file.dmr = sub("chem.snp.ewas","dmr",file) %>% sub(".txt",".csv",.)
+    write.csv(dmr_w_beta,file.dmr)
+    rm(comb_p_GR_DF)
+    
+  }else{
+    
+    file.dmr = sub("chem.snp.ewas","dmr",file) %>% sub(".txt",".csv",.)
+    dmr_wo_beta = as.data.frame(comb_p_GR)
+    write.csv(dmr_wo_beta,file.dmr)
+    
+  }
+}
+
+```
+
+```{r dmr analysis for pcb_all}
+
+setwd("~/ewas/pesticides/pcb_all_dmr")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+###############################################################
+## without PCs
+files = c("latino.chem.snp.ewas.pcb_all.meta.txt",
+          "wAndL.chem.snp.ewas.pcb_all.meta.txt", 
+          "white.chem.snp.ewas.pcb_all.meta.txt" )
+
+for(file in files){
+  
+  #file = "wAndL.chem.snp.ewas.pcb_all.meta.txt"
+  raw = fread(paste0("~/ewas/pesticides/pcb_all_meta/",file)) 
+  raw1 = raw %>%
+    dplyr::rename("probe"="CpG") %>%
+    mutate(p = p.fe) %>%
+    dplyr::select(probe,p) %>%
+    inner_join(annoEPIC,by="probe") %>%
+    mutate(chr=sub("chr","",chr))%>%
+    arrange(chr,start)%>%
+    na.omit()
+  if(length(which(raw1$p==0))!=0) raw1$p[which(raw1$p==0)] = min(raw1$p[-which(raw1$p==0)])/100
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=FALSE,
+        mht_plot=FALSE)
+  
+  file.figure = sub("chem.snp.ewas.","",file) %>% sub(".txt","",.)
+  if (file.exists("region_plot.pdf")) {
+   file.rename("region_plot.pdf", paste0(file.figure,"_region_plot.pdf"))
+  } else {
+   cat("plotting seems to have failed")
+  }
+  
+  dmr = read.csv("resu_ipdmr.csv") %>%
+    filter(nprobe>1)
+  
+  comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field="end",
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  
+  if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+  comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene')
+  }
+  
+  comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+    mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+    dplyr::select(-strand)
+  
+  dmrs_1 = comb_p_GR_DF %>%  
+    dplyr::select(seqnames,start,end,dmr_id) %>%
+    as.data.frame()
+  
+  betasAll = raw %>%
+    filter(!is.na(p.fe))%>%
+    mutate(Beta = coef.fe) %>%
+    dplyr::select(CpG,Beta) %>%
+    left_join(annoEPIC,by=c("CpG"="probe")) %>%
+    arrange(chr,start)%>%
+    na.omit()
+  
+  DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("seqnames"),
+                         start.field="start",
+                         end.field=c("end"),
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+  Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("chr"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+  overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+  
+  a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+    dplyr::select(dmr_id)
+  b=betasAll[queryHits(overlap_DMR_Res),] 
+  com = cbind(b,a) %>% 
+    as.data.frame() %>%
+    arrange(chr,start) %>%
+    group_by(dmr_id) %>%
+    summarise(mean_beta = mean(Beta))
+  
+  dmr_w_beta = comb_p_GR_DF %>%
+    left_join(com,by="dmr_id") %>%
+    dplyr::select(-dmr_id)
+  
+  file.dmr = sub("chem.snp.ewas","dmr",file) %>% sub(".txt",".csv",.)
+  write.csv(dmr_w_beta,file.dmr)
+}
+
+# latino.chem.snp.ewas.pcb_all.meta.txt: Number of DMRs identified:   721 
+# wAndL.chem.snp.ewas.pcb_all.meta.txt: Number of DMRs identified:   14751 
+# white.chem.snp.ewas.pcb_all.meta.txt: Number of DMRs identified:   28345 
+
+###############################################################
+# ## with 5 PCs
+# files = c("latino.chem.5pc.snp.ewas.pcb_all.meta.txt",
+#           "wAndL.chem.5pc.snp.ewas.pcb_all.meta.txt", 
+#           "white.chem.5pc.snp.ewas.pcb_all.meta.txt" )
+# 
+# for(file in files){
+#   
+#   #file = "white.chem.5pc.snp.ewas.pcb_all.meta.txt"
+#   raw = fread(paste0("~/ewas/pesticides/pcb_all_meta/",file)) 
+#   raw1 = raw %>%
+#     dplyr::rename("probe"="CpG") %>%
+#     mutate(p = p.fe) %>%
+#     dplyr::select(probe,p) %>%
+#     inner_join(annoEPIC,by="probe") %>%
+#     mutate(chr=sub("chr","",chr))%>%
+#     arrange(chr,start)%>%
+#     na.omit()
+#   if(length(which(raw1$p==0))!=0) raw1$p[which(raw1$p==0)] = min(raw1$p[-which(raw1$p==0)])/100
+#   
+#   ipdmr(raw1,
+#         include.all.sig.sites=FALSE,
+#         region_plot=FALSE,
+#         mht_plot=FALSE)
+#   
+#   file.figure = sub("chem.5pc.snp.ewas.","",file) %>% sub(".txt","",.)
+#   if (file.exists("region_plot.pdf")) {
+#    file.rename("region_plot.pdf", paste0(file.figure,"_region_plot.pdf"))
+#   } else {
+#    cat("plotting seems to have failed")
+#   }
+#   
+#   dmr = read.csv("resu_ipdmr.csv") %>%
+#     filter(nprobe>1)
+#   
+#   comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+#                            ignore.strand=T,
+#                            seqinfo=NULL,
+#                            seqnames.field=c("chr"),
+#                            start.field="start",
+#                            end.field="end",
+#                            strand.field="strand",
+#                            starts.in.df.are.0based=FALSE)
+#   
+#   if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+#   comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene')
+#   }
+#   
+#   comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+#     mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+#     dplyr::select(-strand)
+#   
+#   dmrs_1 = comb_p_GR_DF %>%  
+#     dplyr::select(seqnames,start,end,dmr_id) %>%
+#     as.data.frame()
+#   
+#   betasAll = raw %>%
+#     filter(!is.na(p.fe))%>%
+#     mutate(Beta = coef.fe) %>%
+#     dplyr::select(CpG,Beta) %>%
+#     left_join(annoEPIC,by=c("CpG"="probe")) %>%
+#     arrange(chr,start)%>%
+#     na.omit()
+#   
+#   DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+#                          ignore.strand=T,
+#                          seqinfo=NULL,
+#                          seqnames.field=c("seqnames"),
+#                          start.field="start",
+#                          end.field=c("end"),
+#                          strand.field="strand",
+#                          starts.in.df.are.0based=FALSE)
+#   Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+#                            ignore.strand=T,
+#                            seqinfo=NULL,
+#                            seqnames.field=c("chr"),
+#                            start.field="start",
+#                            end.field=c("end"),
+#                            strand.field="strand",
+#                            starts.in.df.are.0based=FALSE)
+#   overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+#   
+#   a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+#     dplyr::select(dmr_id)
+#   b=betasAll[queryHits(overlap_DMR_Res),] 
+#   com = cbind(b,a) %>% 
+#     as.data.frame() %>%
+#     arrange(chr,start) %>%
+#     group_by(dmr_id) %>%
+#     summarise(mean_beta = mean(Beta))
+#   
+#   dmr_w_beta = comb_p_GR_DF %>%
+#     left_join(com,by="dmr_id") %>%
+#     dplyr::select(-dmr_id)
+#   
+#   file.dmr = sub("chem.5pc.snp.ewas","dmr",file) %>% sub(".txt",".csv",.)
+#   write.csv(dmr_w_beta,file.dmr)
+# }
+
+
+```
+
+# Paper preparation
+
+```{r prepare results for paper for a specific chemical}
+
+setwd("~/ewas/pesticides/pcb_all_paper")
+library(tidyverse)
+library(data.table)
+
+# in all subjects for pcb_all
+chemical = "pcb_all"
+# top CpGs from the scanning
+meta_anno =  fread(paste0("~/ewas/pesticides/meta_anno/chem.snp.ewas.",chemical,".meta.anno.txt"))
+
+# in white subjects for pcb_all
+chemical = "white.pcb_all"
+# in latino subjects for pcb_all
+chemical = "latino.pcb_all"
+meta_anno =  fread(paste0("~/ewas/pesticides/pcb_all_meta_anno/chem.snp.ewas.",chemical,".meta.anno.txt"))
+
+#####
+fdr_res = filter(meta_anno %>% filter(fdr<0.05))
+fdr_res %>% nrow()
+table(fdr_res$set_nums)
+
+bf_res = filter(meta_anno %>% filter(bf<0.05)) 
+bf_res %>% nrow()
+table(bf_res$set_nums)
+
+meta_anno_top10 = meta_anno[1:100,]
+meta_anno_top10 %>% filter(UCSC_RefGene_Name !='') %>% 
+  mutate(UCSC_RefGene_Name=gsub(";.*$","",UCSC_RefGene_Name))%>%
+  dplyr::select(UCSC_RefGene_Name) %>% 
+  unique() %>%
+  as.data.frame()
+write.csv(meta_anno_top10,paste0(chemical,"_meta_anno_top10.csv"))
+
+# distribution of PCB levels (visualization)
+all_subs = read_rds("pcb_all_all_subs.rds") %>%
+  dplyr::select(logged_pcb_all,setN)
+all_subs %>%
+  na.omit() %>%
+  mutate(setN = as.factor(setN)) %>%
+  ggplot(aes(x=logged_pcb_all))+
+  geom_density()+
+  facet_wrap(~setN, ncol=1,scales="free_y")+
+  theme_classic() +
+  labs(x="logged PCB all level",y="Distribution by set")
+
+by_race_subs = read_rds("pcb_all_by_race.rds") %>%
+  dplyr::select(logged_pcb_all,setN,race)
+
+by_race_subs %>%
+  na.omit() %>%
+  filter(race==1) %>%
+  mutate(setN = as.factor(setN)) %>%
+  ggplot(aes(x=logged_pcb_all))+
+  geom_density()+
+  facet_wrap(~setN, ncol=1,scales="free_y")+
+  theme_classic() +
+  labs(x="logged PCB all level in Whites",y="Distribution by set")
+
+by_race_subs %>%
+  na.omit() %>%
+  filter(race==3) %>%
+  mutate(setN = as.factor(setN)) %>%
+  ggplot(aes(x=logged_pcb_all))+
+  geom_density()+
+  facet_wrap(~setN, ncol=1,scales="free_y")+
+  theme_classic() +
+  labs(x="logged PCB all level in Latinos",y="Distribution by set")
+
+# overlap of latino and white hits
+chemical = "white.pcb_all"
+meta_anno_white =  fread(paste0("~/ewas/pesticides/pcb_all_meta_anno/chem.snp.ewas.",chemical,".meta.anno.txt")) %>%
+  filter(fdr<0.05)
+
+chemical = "latino.pcb_all"
+meta_anno_lat =  fread(paste0("~/ewas/pesticides/pcb_all_meta_anno/chem.snp.ewas.",chemical,".meta.anno.txt")) %>%
+  filter(fdr<0.05)
+
+meta_anno_overlap = meta_anno_lat %>%
+  inner_join(meta_anno_white,by="CpG")
+
+meta_anno_overlap %>% 
+  filter(UCSC_RefGene_Name.x !='') %>% 
+  mutate(UCSC_RefGene_Name=gsub(";.*$","",UCSC_RefGene_Name.x))%>%
+  dplyr::select(UCSC_RefGene_Name) %>% 
+  unique() %>%
+  as.data.frame()
+```
+

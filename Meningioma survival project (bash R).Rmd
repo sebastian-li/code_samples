@@ -1,0 +1,959 @@
+---
+title: "meningioma"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: survival analysis of meningioma patients, using DNA methylation as predictor, and WHO grade and survival time as outcome.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r clean variables}
+
+library(tidyverse)
+library(data.table)
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+file1 = readxl::read_excel("raw/1698 (Zada-40).xlsx") %>% as.data.frame()%>%
+  mutate(ID=as.character(ID)) %>%
+  mutate(group = gsub("T|N","",KGP_ID)) %>%
+  mutate(tissueType = gsub("[0-9]","",KGP_ID)) 
+file2 = readxl::read_excel("raw/1698 (Zada-40)2.xlsx") %>% as.data.frame()
+
+file3 = readxl::read_excel("raw/Immunomethylomics_survival.xlsx") %>% as.data.frame() %>%
+  mutate(ID=as.character(ID))
+file4 = readxl::read_excel("raw/Meningioma list_final_v3.xlsx") %>% as.data.frame()%>%
+  mutate(ID=as.character(ID)) %>%
+  mutate(Specimen = sub("Brain Tumor","tumor",Specimen)) %>%
+  mutate(Specimen = sub("Brain","normal",Specimen)) 
+
+file_combined = file3 %>%
+  inner_join(file4,by="ID")
+
+file_combined2 = file1 %>%
+  left_join(file_combined,by="ID") %>%
+  dplyr::rename("beadPosition"="Complete Barcode",
+                "subjectId" = "ID",
+                "KGP_ID" = "KGP_ID.x",
+                "WellPosition"="Well Position...3") %>%
+  dplyr::select(-`KGP_ID.y`,-`Well Position...2`) %>%
+  dplyr::select(beadPosition,subjectId,WHO,Age,Sex,group,tissueType,Specimen,Location,`Tissue OCT`,`Tissue Vial`,`Blood Freezer`,status,progressionFree,everything()) 
+
+
+file_combined2_1 <- data.frame(lapply(file_combined2, function(x){
+  gsub("N/A|n/A", NA, x)}))
+  
+write.csv(file_combined2_1,"men.clinical.variables.csv")
+
+```
+
+
+# normalization with noob
+
+```{r meningioma decon}
+
+library(minfi)
+library(minfiData)
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICmanifest)
+library(AnnotationHub)
+library(FlowSorted.Blood.EPIC)
+library(wateRmelon)
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+# preparing targets file
+
+anno = readxl::read_excel("1698 (Zada-40).xlsx") %>%
+  as.data.frame() %>%
+  dplyr::rename("ChipID"="Complete Barcode",
+         "SampleID"="ID")%>%
+  dplyr::mutate(Basename = paste0("/project/wiemels_260/sebastian/meningioma/IDAT FILES/",ChipID))%>%
+  dplyr::select(ChipID,SampleID,Basename)
+
+targetsU <- anno
+RGset <- read.metharray.exp(targets = targetsU)
+
+write_rds(RGset,"RGset.rds")
+
+RGset <- read_rds("RGset.rds")
+
+rowMethylSet <- preprocessRaw(RGset)
+write_rds(rowMethylSet,"rawMethylSet.rds")
+
+noobMethylSet <- preprocessNoob(RGset) # dim: 866238 112 
+write_rds(noobMethylSet,"noobMethylSet.rds")
+
+noobMethylSet <- read_rds("noobMethylSet.rds")
+mSetBmiq <- BMIQ(noobMethylSet)
+write_rds(mSetBmiq,"NoobBeta.rds")
+
+```
+
+```{r noob imputation}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(impute)
+library(tidyverse)
+
+beta_0 = read_rds("NoobBeta.rds")
+beta_1 <- beta_0[rowMeans(is.na(beta_0))<0.1, ]
+beta_2 <- beta_1[,colMeans(is.na(beta_1))<0.1]
+
+#impute remaining missing values using impute.knna
+beta_2 <- impute.knn(as.matrix(beta_2))$data
+
+write_rds(beta_2,"NoobBeta.imputed.rds")
+
+```
+
+```{r get sex information and other qcs}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(tidyverse)
+library(minfi)
+library(minfiData)
+library(data.table)
+#library(IlluminaHumanMethylationEPICmanifest)
+
+RGset <- read_rds("RGset.rds")
+MSet <- preprocessRaw(RGset) 
+qc <- getQC(MSet)
+
+qc$index = c(1:nrow(qc))
+qcdf = qc %>% 
+  as.data.frame() %>%
+  mutate(totalV = mMed+uMed) %>%
+  arrange(totalV)
+badSamples = rownames(qcdf[1:14,])
+
+png("qcs/qcplot.png")
+plotQC(qc)
+dev.off()
+
+#detection P values
+detecFrame = detectionP(RGset)
+detecBin = colMeans(detecFrame<0.05) %>%
+  as.data.frame()
+colnames(detecBin) = "percent"
+detecBin$bad = 0
+detecBin$bad[rownames(detecBin)%in%badSamples]=1
+detecBin$bad = as.factor(detecBin$bad)
+
+ggplot(detecBin, aes(x=bad, y=percent, fill=as.factor(bad))) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_classic()+
+  xlab("Bad sample?") +
+  ylab("cpgs passing detection P value") +
+  scale_fill_discrete(name="sample status",labels=c("good","bad"))
+
+#detection P values by tissue type
+clinical_type=read.csv("men.clinical.variables.csv") %>%
+  dplyr::select(beadPosition,tissueType,WHO,Age,status) %>%
+  column_to_rownames(var="beadPosition")
+clinical_type$bad = 0
+clinical_type$bad[rownames(clinical_type)%in%badSamples]=1
+
+table(clinical_type$tissueType,clinical_type$bad)
+table(clinical_type$WHO,clinical_type$bad)
+plot(clinical_type$Age,as.factor(clinical_type$bad))
+table(clinical_type$status,clinical_type$bad)
+
+ggplot(detecBin, aes(x=bad, y=percent, fill=as.factor(bad))) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_classic()+
+  xlab("Bad sample?") +
+  ylab("cpgs passing detection P value") +
+  scale_fill_discrete(name="sample status",labels=c("good","bad"))
+
+png("qcs/density.png")
+densityPlot(MSet)
+dev.off()
+
+clinical=read.csv("men.clinical.variables.csv")
+subs = data.frame(beadPosition=colnames(RGset)) %>%
+  left_join(clinical,by="beadPosition")
+sampGroups = subs$tissueType
+sampGroups = subs$WHO
+
+png("qcs/mds.png")
+mdsPlot(RGset,sampGroups=sampGroups)
+dev.off()
+
+ns = clinical %>% filter(tissueType=="N") %>% dplyr::select(beadPosition)
+MSet = MSet[,ns$beadPosition]
+GMset <- mapToGenome(MSet)
+predictedSex <- getSex(GMset, cutoff = -2)
+write.csv(predictedSex,"qcs/predictedSex.csv")
+
+# predictedSex = read.csv("qcs/predictedSex.csv",row.names = 1)
+sexComp = predictedSex %>%
+  as.data.frame() %>%
+  rownames_to_column(var="beadPosition") %>%
+  inner_join(clinical,by="beadPosition") 
+table(sexComp$Sex,sexComp$predictedSex)
+
+sexComp[,c("beadPosition","Sex","predictedSex")]
+# 204776820012_R01C01
+
+GMset <- addSex(GMset)
+plotSex(GMset)
+which(colnames(GMset)=="204776820012_R01C01")
+
+```
+
+
+# normalization with sesame
+
+module load gcc/11.2.0
+module load openblas/0.3.18
+module load r/4.1.2
+export EXPERIMENT_HUB_CACHE=/home1/lishaobo/.cache/R/ExperimentHub
+R
+
+```{r sesame}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+#Sys.setenv(EXPERIMENT_HUB_CACHE = "/home1/lishaobo/.cache/R/ExperimentHub")
+#tools::R_user_dir("ExperimentHub", which="cache")
+#[1] "/home1/lishaobo/.cache/R/ExperimentHub"
+
+library(sesame)
+library(tidyverse)
+library(impute)
+
+library(BiocParallel)
+#sesameDataCacheAll()
+
+idat_dir <- "IDAT FILES"
+betas <- openSesame(idat_dir,BPPARAM = SerialParam())
+write_rds(betas,"men.sesame.rds")
+
+# sesame imputation
+setwd("/project/wiemels_260/sebastian/sets/twins_epic/")
+library(impute)
+library(tidyverse)
+
+beta_0 = read_rds("men.sesame.rds")
+beta_1 <- beta_0[rowMeans(is.na(beta_0))<0.05, ]
+beta_2 <- beta_1[,colMeans(is.na(beta_1))<0.05]
+beta_2 <- impute.knn(as.matrix(beta_2))$data
+write_rds(beta_2,"men.sesame.imputed.rds")
+
+```
+
+# Deconvolution
+
+```{r idol deconvolution}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+library(tidyverse)
+library(FlowSorted.Blood.EPIC)
+
+# using child reference panel
+RGset <- read_rds("RGset.rds")
+
+FlowSorted.CordBloodCombined.450k <- read_rds("/project/wiemels_260/sebastian/sets/set3/deconvolution/FlowSorted.CordBloodCombined.450k.rds")
+IDOLOptimizedCpGsCordBlood <- read_rds("/project/wiemels_260/sebastian/sets/set3/deconvolution/IDOLOptimizedCpGsCordBlood.rds")
+
+IDOL_DECON<-estimateCellCounts2(RGset,
+ compositeCellType = "Blood",
+ processMethod = "preprocessNoob",
+ probeSelect = "IDOL",
+ cellTypes = c("CD8T", "CD4T", "NK",
+ "Bcell", "Mono", "Gran", "nRBC"),
+ referencePlatform =
+ "IlluminaHumanMethylationEPIC",
+ referenceset =
+ "FlowSorted.CordBloodCombined.450k",
+ IDOLOptimizedCpGs =
+ IDOLOptimizedCpGsCordBlood,
+ returnAll = FALSE)
+
+IDOL_DECON1 = IDOL_DECON$counts %>% as.data.frame %>%
+  rownames_to_column(var="beadPosition")
+
+write_rds(IDOL_DECON1,"meningioma_IDOL_DECON.rds")
+write.csv(IDOL_DECON1,"meningioma_IDOL_DECON.csv")
+ 
+IDOL_DECON1 %>%
+  reshape::melt(id="beadPosition") %>%
+  dplyr::rename("cellType"="variable","cellProportion"="value") %>%
+  ggplot(aes(x=cellType, y=cellProportion,fill=cellType)) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_bw() +
+  ggtitle("Cell proportions in meningioma samples")+
+  xlab("Cell Types") +
+  ylab("Proportions") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("Cell_proportions_in_meningioma_all.png",width = 8,height = 6)
+
+# plot a matched plot
+anno = readxl::read_excel("1698 (Zada-40).xlsx") %>%
+  as.data.frame() %>%
+  dplyr::rename("beadPosition"="Complete Barcode",
+         "subjectId"="ID")%>%
+  select(beadPosition,subjectId,KGP_ID) %>%
+  inner_join(IDOL_DECON1,by="beadPosition") %>% 
+  mutate(tissue = str_sub(KGP_ID,start=-1)) %>%
+  reshape::melt(id=c("beadPosition","subjectId","KGP_ID","tissue")) %>%
+  dplyr::rename("cellType"="variable","cellProportion"="value") 
+
+
+anno %>%
+  mutate(subjectId=as.integer(subjectId),
+         tissue=as.factor(tissue))%>%
+  ggplot(aes(x=tissue,y=cellProportion, fill=tissue))+
+  geom_boxplot(outlier.size=0.2)+
+  geom_point(size=0.5)+ 
+  geom_line(aes(group=subjectId),lwd=0.5,alpha=0.5,color="grey") +
+  facet_wrap(~cellType, ncol=2,scales="free_y")+
+  theme_classic() +
+  labs(x="Tissue Type",y="Cell proportions")+
+  ggtitle("Cell proportions in meningioma samples")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("meningiomaDeCon.png",width = 6,height = 9)
+
+####################################################################################################
+####################################################################################################
+
+# using adult reference panel
+RGset <- read_rds("RGset.rds")
+
+# library(ExperimentHub)
+# hub <- ExperimentHub()
+# query(hub, "FlowSorted.Blood.EPIC")
+# FlowSorted.Blood.EPIC <- hub[["EH1136"]]
+# write_rds(FlowSorted.Blood.EPIC, "/project/wiemels_260/sebastian/sets/set3/deconvolution/FlowSorted.Blood.EPIC.rds")
+
+FlowSorted.Blood.EPIC <- read_rds("/project/wiemels_260/sebastian/sets/set3/deconvolution/FlowSorted.Blood.EPIC.rds")
+
+IDOL_DECON_ad<-estimateCellCounts2(RGset,
+   compositeCellType = "Blood",
+   processMethod = "preprocessNoob",
+   probeSelect = "IDOL",
+   cellTypes = c("CD8T", "CD4T", "NK",
+   "Bcell", "Mono", "Neu"),
+   referencePlatform ="IlluminaHumanMethylationEPIC",
+   referenceset = "FlowSorted.Blood.EPIC",
+   IDOLOptimizedCpGs = IDOLOptimizedCpGs,
+   returnAll = FALSE)
+
+IDOL_DECON <- IDOL_DECON_ad$counts %>% 
+  as.data.frame()%>%
+  rownames_to_column(var="beadPosition") 
+write_rds(IDOL_DECON,"meningioma_IDOL_DECON_adult.rds")
+write.csv(IDOL_DECON,"meningioma_IDOL_DECON_adult.csv")
+ 
+IDOL_DECON %>%
+  as.data.frame()%>%
+  rownames_to_column(var="beadPosition") %>%
+  reshape::melt(id="beadPosition") %>%
+  dplyr::rename("cellType"="variable","cellProportion"="value") %>%
+  ggplot(aes(x=cellType, y=cellProportion,fill=cellType)) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_bw() +
+  ggtitle("Cell proportions in meningioma samples")+
+  xlab("Cell Types") +
+  ylab("Proportions") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("Cell_proportions_in_meningioma_all_adult.png",width = 8,height = 6)
+
+# plot a matched plot
+anno = readxl::read_excel("1698 (Zada-40).xlsx") %>%
+  as.data.frame() %>%
+  dplyr::rename("beadPosition"="Complete Barcode",
+         "subjectId"="ID")%>%
+  select(beadPosition,subjectId,KGP_ID) %>%
+  inner_join(IDOL_DECON,by="beadPosition") %>% 
+  mutate(tissue = str_sub(KGP_ID,start=-1)) %>%
+  reshape::melt(id=c("beadPosition","subjectId","KGP_ID","tissue")) %>%
+  dplyr::rename("cellType"="variable","cellProportion"="value") 
+
+anno %>%
+  mutate(subjectId=as.integer(subjectId),
+         tissue=as.factor(tissue))%>%
+  ggplot(aes(x=tissue,y=cellProportion, fill=tissue))+
+  geom_boxplot(outlier.size=0.2)+
+  geom_point(size=0.5)+ 
+  geom_line(aes(group=subjectId),lwd=0.5,alpha=0.5,color="grey") +
+  facet_wrap(~cellType, ncol=2,scales="free_y")+
+  theme_classic() +
+  labs(x="Tissue Type",y="Cell proportions")+
+  ggtitle("Cell proportions in meningioma samples")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("meningiomaDeConAdult.png",width = 6,height = 9)
+
+```
+
+#epistructure and refractor
+
+```{r prepare for glint files}
+
+library(data.table)
+library(tidyverse)
+library(fastDummies)
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+getcpgs1 = fread("/project/wiemels_260/sebastian/dependencies/glint/parsers/assets/epistructure_reference_sites.txt",header=FALSE)
+colnames(getcpgs1) = "ID"
+getcpgs2 = fread("/project/wiemels_260/sebastian/dependencies/glint/parsers/assets/12859_2016_943_MOESM5_ESM_ref.txt") %>%
+  as.data.frame() %>%
+  dplyr::select(ID)
+getcpgs = rbind(getcpgs1,getcpgs2) %>%
+  as.data.frame() %>%
+  distinct(ID,.keep_all = TRUE)
+
+glint_0 <- read_rds("men.sesame.imputed.rds") 
+glint_0 <- glint_0[rownames(glint_0)%in%getcpgs$ID,]
+  
+clinical_0 <- read.csv("men.clinical.variables.csv")
+
+clinical_1 = clinical_0 %>%
+  dplyr::select(beadPosition,Age,Sex,tissueType) %>%
+  na.omit() %>%
+  mutate(Sex = as.numeric(as.factor(Sex)),
+         tissueType = as.numeric(as.factor(tissueType))) %>%
+  column_to_rownames(var="beadPosition")
+
+subjectsCon = intersect(clinical_0$beadPosition,colnames(glint_0))
+length(subjectsCon)
+
+dataF = glint_0[grepl("cg",rownames(glint_0)),subjectsCon]
+
+clinical_2 = clinical_1[subjectsCon,]
+
+phenoF = clinical_2 %>%
+  dplyr::select(tissueType)
+
+covF = clinical_2 %>%
+  rownames_to_column(var="beadPosition") %>%
+  dplyr::select(beadPosition,Age,Sex) %>%
+  column_to_rownames(var="beadPosition") 
+
+identical(rownames(covF),rownames(phenoF))
+identical(rownames(covF),colnames(dataF))
+
+write.table(dataF,"glintRaw/datafile.txt",quote=FALSE)
+write.table(phenoF,"glintRaw/phenotypes.txt",quote=FALSE)
+write.table(covF,"glintRaw/covariates.txt",quote=FALSE)
+
+
+```
+
+```{bash epistructure and refractor}
+
+cd /project/wiemels_260/sebastian/meningioma/glintRaw
+
+module load python/2.7.16
+
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile datafile.txt \
+  --covarfile covariates.txt \
+  --phenofile phenotypes.txt \
+  --gsave
+  
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile datafile.glint \
+  --refactor --k 10 \
+  --covar Age Sex \
+  --gsave --out data_refractor
+  
+python /project/wiemels_260/sebastian/dependencies/glint/glint.py \
+  --datafile data_refractor.glint \
+  --epi --savepcs 10 \
+  --covar rc1 rc2 rc3 rc4 rc5 rc6 rc7 rc8 rc9 rc10 \
+  --gsave --out data_epi
+
+```
+
+```{r generate glint control file}
+
+setwd("/project/wiemels_260/sebastian/meningioma")
+library(tidyverse)
+library(data.table)
+
+epi = fread("glintRaw/data_epi.epistructure.pcs.txt",header=FALSE) %>%
+  as.data.frame() 
+colnames(epi) = c("ID","epi1","epi2","epi3","epi4","epi5","epi6","epi7","epi8","epi9","epi10")
+
+rfr = fread("glintRaw/data_refractor.refactor.components.txt") %>%
+  inner_join(epi,by="ID") %>%
+  dplyr::rename("beadPosition"="ID")
+
+write_rds(rfr,"glint.control.rds")
+
+```
+
+# ewas models
+
+```{r ewas models}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(tidyverse)
+library(data.table)
+
+logistic.fun <- function(meth, var, cov){
+  
+    dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())
+    ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+    mod <- try(glm(ff, data = dat, family=binomial))
+    cf = try(summary(mod)$coefficients)
+    Ncase = sum(dat[,var]==1) 
+    Ncontrol = sum(dat[,var]==0) 
+
+  	if (exists(class(cf)[1]) == FALSE) {
+  		out = c(rep(NA,4),Ncase,Ncontrol)
+  	} else {
+			coef = cf[2,"Estimate"]
+			se = cf[2,"Std. Error"]
+			z.value = cf[2,"z value"]
+			p.value = cf[2,"Pr(>|z|)"]
+			out = c(coef, se, z.value,p.value,Ncase,Ncontrol) 
+    }
+  names(out) = c("Beta","SE", "Z","P","ncase","ncontrol"); 
+  return(out) 
+  }
+
+linear <- function(meth,var,cov){
+
+  dat <- data.frame(meth = meth, cov) %>% dplyr::select(one_of(var),meth,everything())
+  ff  <- formula(paste(var," ~ ", paste0(colnames(dat)[-1], collapse="+")))
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  N <- sum(!is.na(dat[,1]))
+  if (class(mod)=="lm") {
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    t.value = coefs[2,"t value"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, t.value, p.value, N)
+  } else {
+    out = c(rep(NA,4), N)
+  }
+  names(out) = c("Beta","SE", "t", "P", "N")
+  return(out)
+}
+
+clinical=read.csv("men.clinical.variables.csv") %>%
+  mutate(progression=`Progression.`)%>%
+  filter(progression!="N/A") %>%
+  mutate(progression=ifelse(progression=="Yes",1,0)) %>%
+  dplyr::select(beadPosition,WHO,Age,Sex,tissueType,progression) 
+clinical_var = read_rds("glint.control.rds") %>%
+  dplyr::select(beadPosition,rc1,rc2,rc3,epi1,epi2,epi3) %>%
+  inner_join(clinical,by="beadPosition")
+meth = read_rds("men.sesame.imputed.rds")
+
+cl <- makeCluster(detectCores()-1, type="FORK")
+
+# DNA methylation (blood) and progression
+
+for(tissue in c("N","T")){
+  for(varName in c("progression","WHO")){
+    
+      clinical_blood = clinical_var %>% filter(tissueType==tissue) %>%
+        dplyr::select(beadPosition,one_of(varName),rc1,rc2,rc3,epi1,epi2,epi3,Age,Sex) %>%
+        column_to_rownames(var="beadPosition")
+      subs = intersect(rownames(clinical_blood),colnames(meth))
+      clinical_file = clinical_blood[subs,]
+      meth_file = meth[,subs]
+      
+      if(identical(rownames(clinical_file),colnames(meth_file))==TRUE){
+      
+        # methylt = meth_file[1:100,] 
+        # results = t(apply(methylt,1,logistic.fun,varName,clinical_file))
+        
+        if(varName=="progression"){
+          results <- t(parApply(cl, meth_file, 1, logistic.fun, varName, clinical_file))}
+
+        if(varName=="WHO"){
+          results <- t(parApply(cl, meth_file, 1, linear, varName, clinical_file))}
+        
+        results <- as.data.frame(results) %>%
+          na.omit() %>%
+          rownames_to_column(var="cpg")
+        
+        write.table(results,paste0(varName,".",tissue,".ewas.txt"),
+              quote=FALSE,
+              row.names = FALSE,
+              sep='\t')  
+  }}}
+
+stopCluster(cl)
+
+```
+
+```{r output top hits from each model}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(tidyverse)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group)
+
+allCpGCandidates = list()
+i = 1
+
+for(tissue in c("N","T")){
+  for(varName in c("progression","WHO")){
+  
+    #tissue="N"
+    #varName="WHO"
+    
+   results = fread(paste0(varName,".",tissue,".ewas.txt")) %>%
+    dplyr::filter(grepl('cg', cpg)) %>% 
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) 
+     
+    # Nbeta <- sum(!is.na(results$P))
+    # tmp <- results[!is.na(results$P),]
+    # lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+    # print(round(lambda, 2))
+     
+    results <- results %>%
+      mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+      mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
+    
+    if(sum(results$fdr<0.05)<50){
+      cpgsL = head(results,50) %>% dplyr::select(cpg)
+    }else{
+      cpgsL = results %>% dplyr::filter(fdr<0.05) %>% dplyr::select(cpg)
+    }
+    
+    allCpGCandidates[[i]] = cpgsL
+    i = i +1
+   
+    # if(sum(results$P==0)>0){
+    # results1 = results %>% filter(P==0) %>% filter(UCSC_RefGene_Name!="")
+    # }else{
+    # results1 = results %>% filter(UCSC_RefGene_Name!="")
+    # results1 = head(results1,50)}
+    # write.csv(results1,paste0(varName,".",tissue,".tophits.ewas.csv"))
+  
+  }}
+
+allCpGCandidatesDF = do.call(rbind,allCpGCandidates) %>% 
+  as.data.frame() %>%
+  distinct(cpg,.keep_all=TRUE)
+
+write_rds(allCpGCandidatesDF,"allCpGCandidatesDF.rds")
+
+```
+
+#  survival analysis
+
+```{r Blood cell types and outcome (COX)}
+
+library(tidyverse)
+library(data.table)
+library(survival)
+library(survminer)
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+cellP= read_rds("meningioma_IDOL_DECON_adult.rds")
+
+clinical_ori=read.csv("men.clinical.variables.csv") %>%
+  dplyr::select(beadPosition,WHO,Age,Sex,tissueType,status,progressionFree) %>%
+  left_join(cellP,by='beadPosition') %>%
+  na.omit()
+
+####################################
+# based on survival time
+cellPCoxLs=list()
+i=1
+for(tissueT in c("T","N")){
+  
+  clinical = clinical_ori %>% filter(tissueType==tissueT)
+  
+  for(cellT in c("CD8T","CD4T","NK","Bcell","Mono","Neu")){
+    
+    cox <- coxph(Surv(clinical$progressionFree, clinical$status) ~ clinical[,cellT]) %>%
+      summary
+    cellPCoxLs[[i]] = c("univariable",tissueT,cellT,cox$coefficients)
+    i = i+1
+
+    cox <- coxph(Surv(clinical$progressionFree, clinical$status) ~ clinical[,cellT]+clinical$WHO+clinical$Age+clinical$Sex) %>%
+      summary
+    cellPCoxLs[[i]] = c("multivariable",tissueT,cellT,cox$coefficients[1,])
+    i = i+1
+    
+  }
+}
+
+cellPCox = do.call(rbind,cellPCoxLs) %>% 
+  as.data.frame()
+colnames(cellPCox) = c("model","tissueType","cellType", "coef","exp(coef)","se(coef)","z","Pr(>|z|)" )
+write.csv(cellPCox,"cell.proportion.cox.proportional.hazard.csv")
+
+####################################
+# based on WHO grade
+
+for(tissueT in c("T","N")){
+
+  clinical = clinical_ori %>% filter(tissueType==tissueT)
+  
+  cellP <- data.frame()
+  j = 1
+  for(i in  c("CD8T","CD4T","NK","Bcell","Mono","Neu")){
+    lm1 <- lm(clinical[,i] ~ clinical$WHO)%>%
+      tidy() %>% as.data.frame()
+    cellP[j , 1] <- i
+    cellP[j , 2] <- lm1[2,2]
+    cellP[j , 3] <- lm1[2,3]
+    cellP[j , 4] <- lm1[2,4]
+    cellP[j , 5] <- lm1[2,5]
+    cellP[j , 6] <- "univariable"
+    j = j+1
+  }
+
+  for(i in  c("CD8T","CD4T","NK","Bcell","Mono","Neu")){
+    lm1 <- lm(clinical[,i] ~ clinical$WHO+clinical$Age+clinical$Sex)%>%
+      tidy() %>% as.data.frame()
+    cellP[j , 1] <- i
+    cellP[j , 2] <- lm1[2,2]
+    cellP[j , 3] <- lm1[2,3]
+    cellP[j , 4] <- lm1[2,4]
+    cellP[j , 5] <- lm1[2,5]
+    cellP[j , 6] <- "multivariable"
+    j = j+1
+  }
+    
+  colnames(cellP) <- c("cell_name","estimate_10epi","stderror_10epi","stat_10epi","pvalue_10epi","model")
+  write.csv(cellP,paste0(tissueT,"_who_cellP.csv"))
+  
+  }
+
+
+
+```
+
+```{r top hits to draw KM plot from the EWAS analysis}
+
+# what does survival data look like?
+library(tidyverse)
+library(data.table)
+library(survival)
+library(survminer)
+setwd("/project/wiemels_260/sebastian/meningioma/")
+
+meth = read_rds("men.sesame.imputed.rds")
+allCpGCandidatesDF = read_rds("allCpGCandidatesDF.rds")
+clinical=read.csv("men.clinical.variables.csv") %>%
+  dplyr::select(beadPosition,WHO,Age,Sex,tissueType,status,progressionFree) 
+
+meth = meth[allCpGCandidatesDF$cpg, clinical$beadPosition]
+
+kmCruveList = list()
+i=1
+
+for(tissueT in c("N","T")){
+  for(probe in allCpGCandidatesDF$cpg){
+    
+  # tissueT="T"
+  # probe = allCpGCandidatesDF$cpg[1]
+  
+  meth_1 = meth[probe,] %>% as.data.frame() %>% rownames_to_column(var="beadPosition")
+  colnames(meth_1)[2]="beta"
+  indData = clinical %>% 
+    filter(tissueType==tissueT) %>%
+    inner_join(meth_1,by="beadPosition") %>% mutate(quad = ifelse(beta>median(beta),2,1)) %>%
+    dplyr::select(progressionFree,status,quad) %>%
+    na.omit()
+  
+  fit <- survfit(Surv(progressionFree, status) ~ quad, data = indData)
+  pval = surv_pvalue(fit)[1,'pval']
+  kmCruveList[[i]] = c(tissueT,probe,pval)
+  i = i+1
+      
+  }
+}
+
+kmCruve = do.call(rbind,kmCruveList) %>% as.data.frame() %>%
+  arrange(V1,V3)
+colnames(kmCruve) = c("tissue","cpg","survivalP")
+write.csv(kmCruve,"kmCruvePvalue.csv")
+
+#kmCruve = read.csv("kmCruvePvalue.csv")
+plots = kmCruve %>% filter(survivalP<0.05)
+
+# annotation
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,UCSC_RefGene_Name)
+cpganno = plots %>%
+  left_join(annoEPIC,by="cpg") %>%
+  mutate(geneName = gsub(";.*$","",UCSC_RefGene_Name)) %>%
+  filter(geneName!="")
+cpganno %>% filter(tissue=="N") %>% dplyr::select(geneName)
+cpganno %>% filter(tissue=="T") %>% dplyr::select(geneName)
+
+for(i in 1:nrow(plots)){
+  
+  probe = plots[i,"cpg"]
+  tissueT = plots[i,"tissue"]
+  
+  meth_1 = meth[probe,] %>% as.data.frame() %>% rownames_to_column(var="beadPosition")
+  colnames(meth_1)[2]="beta"
+  indData = clinical %>% 
+    filter(tissueType==tissueT) %>%
+    inner_join(meth_1,by="beadPosition") %>% mutate(quad = ifelse(beta>median(beta),2,1)) %>%
+    dplyr::select(progressionFree,status,quad) %>%
+    na.omit()
+  fit <- survfit(Surv(progressionFree, status) ~ quad, data = indData)
+  
+  ggsurvplot(fit,
+          pval = TRUE, conf.int = FALSE,
+          #risk.table = TRUE, # Add risk table
+          #risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          legend.labs = c(paste0(probe,"≤ median"), paste0(probe,"> median")),  
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+  
+  ggsave(paste0("kmplots/",tissueT,".",probe,".km.png"), width = 6, height = 6)
+  
+}
+
+
+# Parthway enrichment on these CpGs
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(tidyverse)
+library(methylGSA)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos)
+
+kmCruve = read.csv("kmCruvePvalue.csv")
+plots = kmCruve %>% filter(survivalP<0.05)
+
+for(tissue in c("N","T")){
+  
+#  for(varName in c("progression","WHO")){
+
+  #tissue="T"
+
+  varName="progression"
+  CpGs = plots%>% filter(tissue==tissue)
+  
+   results = fread(paste0(varName,".",tissue,".ewas.txt")) %>%
+     filter(cpg %in% CpGs$cpg) %>%
+     left_join(annoEPIC,by="cpg")
+     
+  raw_100 = results %>%
+    mutate(cpg_name=cpg,estimate=Beta,std_error=SE,p_val=P) %>%
+    dplyr::select(cpg_name,chr,pos,estimate,std_error,p_val) %>%
+    as.data.frame()
+  
+  raw_100_vec = as.numeric(raw_100$p_val)
+  raw_100_vec[which(raw_100_vec==0)] = min(raw_100_vec[raw_100_vec!=min(raw_100_vec)])/2 
+  names(raw_100_vec) = raw_100$cpg_name
+  
+  res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
+  #write_rds(res1,"res1.rds")
+  #res1 = read_rds("res1.rds")
+  res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
+  
+  res1$term = "KEGG"
+  res2$term = "GO"
+  res_total = rbind(res1%>%filter(pvalue<0.05),
+                    res2%>%filter(pvalue<0.05)) %>%
+    as.data.frame()
+    
+  write.csv(res_total,paste0(tissue,"_men_pathways.csv"))
+}
+
+```
+
+```{r look up genes}
+
+setwd("/project/wiemels_260/sebastian/meningioma/")
+library(tidyverse)
+library(methylGSA)
+library(data.table)
+library(minfi)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+gene = "foxc1"
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf,UCSC_RefGene_Group,
+                Regulatory_Feature_Group) %>%
+  filter(grepl(gene,UCSC_RefGene_Name))
+
+loouplist = list()
+j = 1
+
+for(tissue in c("N","T")){
+  for(varName in c("progression","WHO")){
+    #tissue="N"
+    #varName="WHO"
+    
+   modelname = paste0(tissue,"_",varName)  
+  
+   results = fread(paste0(varName,".",tissue,".ewas.txt")) %>%
+    dplyr::filter(grepl('cg', cpg)) %>% 
+    filter(!is.na(P))%>%
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>% 
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>%  
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf))%>%
+    mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+    mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+    dplyr::filter(cpg %in% annoEPIC$cpg) %>%
+    dplyr::select( cpg,Beta,Relation_to_Island,UCSC_RefGene_Name,UCSC_RefGene_Group,P,fdr,bf) %>%
+    mutate(modelname=modelname) 
+   
+   loouplist[[j]] = results
+   j = j+1
+   
+}}
+
+looup = do.call(rbind,loouplist) %>% as.data.frame() %>%
+  arrange(fdr)
+
+write.csv(looup,paste0(gene,".look.up.results.csv"))
+
+```
+

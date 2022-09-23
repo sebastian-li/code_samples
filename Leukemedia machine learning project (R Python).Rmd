@@ -1,0 +1,2244 @@
+---
+title: "Super Learner ALL"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: Using a variety of machine learning and deep learning methods, to predict childhood leukemia risk with neonatal DNA methylation data
+
+
+# Trainig machine learning models in R
+
+```{r cleaning and getting ready files}
+
+library(tidyverse)
+library(data.table)
+library(impute)
+library(matrixStats)
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  rownames = rownames(methylation)
+  methyl_t =  methylation %>% t() %>% as.matrix()
+  
+  quantiles <- matrixStats::rowQuantiles(methyl_t, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+  
+  outliers.lower <- rowSums(methyl_t < low, na.rm=T)
+  outliers.upper <- rowSums(methyl_t > upper, na.rm=T)
+  
+  idx <- which(methyl_t < low, arr.ind=T)
+  methyl_t[idx] <- low[idx[,1]]
+  
+  idx <- which(methyl_t > upper, arr.ind=T)
+  methyl_t[idx] <- upper[idx[,1]]
+  
+  n <- rowSums(!is.na(methyl_t))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  
+  methyl_t_t = methyl_t %>% t() %>% as.data.frame
+  rownames(methyl_t_t) = rownames
+  return(list(methylation=methyl_t_t, log=log))
+}
+
+set.seed(528)
+
+setwd("/project/wiemels_494/sebastian/ML/ALL")
+
+# sets 2,4
+## set 4: training and validation set
+## set 2: test set
+### controls vs B cell ALL, confined to european and latino subjects
+
+### non-methylation variables considered
+# mo_age: p-value =  0.8371
+# ch_ageref: p-value = 0.3144
+
+# creating a data frame with exactly the same CpGs and subjects
+## set 2
+clinical2 = read.csv("/project/wiemels_260/sebastian/sets/set2/clinical_variables.csv") %>%
+  dplyr::filter(Trisomy21.cnm==0) %>%
+  distinct(subjectId,.keep_all=TRUE) %>%
+  dplyr::filter(race %in% c(1,3))%>% 
+  dplyr::filter(leuk_dx_type=="B"|CaCo==0) %>%
+  column_to_rownames(var="beadPosition") %>%
+  dplyr::select(CaCo,sex,gestage,race) %>%
+  na.omit()
+
+clinical4 = read.csv("/project/wiemels_260/sebastian/sets/set4/clinical_variables.csv") %>%
+  dplyr::filter(Trisomy21.cnm==0,smp_type=="bg") %>%
+  distinct(subjectId,.keep_all=TRUE) %>%
+  dplyr::filter(race %in% c(1,3))%>% 
+  dplyr::filter(leuk_dx_type=="B"|CaCo==0) %>%
+  column_to_rownames(var="beadPosition") %>%
+  dplyr::select(CaCo,sex,gestage,race)%>%
+  na.omit()
+
+
+set2Methyl = fread("/project/wiemels_260/sebastian/sets/set2/set2_Sesame_beta.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(-V1) %>%
+  column_to_rownames(var="probeId")
+set2Methyl = set2Methyl[,rownames(clinical2)]
+set2Methyl_1 = set2Methyl[rowMeans(is.na(set2Methyl))<0.05,]
+set2Methyl_2 = set2Methyl_1[,colMeans(is.na(set2Methyl_1))<0.05]
+
+clinical2_1 = clinical2[colnames(set2Methyl_2),]
+  
+set4Methyl = fread("/project/wiemels_260/sebastian/sets/set4/set4_Sesame_beta.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(-V1) %>%
+  column_to_rownames(var="probeId")
+set4Methyl = set4Methyl[,rownames(clinical4)]
+set4Methyl_1 = set4Methyl[rowMeans(is.na(set4Methyl))<0.05,]
+set4Methyl_2 = set4Methyl_1[,colMeans(is.na(set4Methyl_1))<0.05]
+
+clinical4_1 = clinical4[colnames(set4Methyl_2),]
+
+commonCpGs = intersect(rownames(set2Methyl_2),rownames(set4Methyl_2))
+commonCpGs.cpg = commonCpGs[grepl("cg",commonCpGs)]
+
+set2Methyl_3 = set2Methyl_2[commonCpGs.cpg,]
+set4Methyl_3 = set4Methyl_2[commonCpGs.cpg,]
+
+set2Methyl_4 <- impute.knn(as.matrix(set2Methyl_3))$data
+set4Methyl_4 <- impute.knn(as.matrix(set4Methyl_3))$data
+
+# do winsorization
+replace.outliers <- winsorize(set2Methyl_4, 0.005)
+set2Methyl_5 <- replace.outliers$methylation %>% as.data.frame()
+
+replace.outliers <- winsorize(set4Methyl_4, 0.005)
+set4Methyl_5 <- replace.outliers$methylation %>% as.data.frame()
+
+
+
+write.table(clinical2_1,"setA.variables.txt",
+            quote=FALSE,
+            sep='\t')
+write.table(clinical4_1,"setB.variables.txt",
+            quote=FALSE,
+            sep='\t')
+write.table(set2Methyl_5,"setA.methyl.txt",
+            quote=FALSE,
+            sep='\t')
+write.table(set4Methyl_5,"setB.methyl.txt",
+            quote=FALSE,
+            sep='\t')
+
+```
+
+
+module load gcc/11.2.0
+module load openblas/0.3.18
+module load r/4.1.2
+
+(To install bartMachine)
+module load bzip2 libiconv icu4c openjdk
+(in R)
+install.packages("rJava", configure.args="CPPFLAGS='-I${BZIP2_ROOT}/include -I${LIBICONV_ROOT}/include -I${ICU4C_ROOT}/include' LDFLAGS='-L${OPENJDK_ROOT}/lib/server -L${BZIP2_ROOT}/lib -L${LIBICONV_ROOT}/lib -L${ICU4C_ROOT}/lib'")
+install.packages("bartMachine")
+
+
+```{r}
+
+setwd("/project/wiemels_494/sebastian/ML/ALL")
+library(SuperLearner)
+library(tidyverse)
+library(data.table)
+
+review_weights = function(cv_sl) {
+  meta_weights = coef(cv_sl)
+  means = colMeans(meta_weights)
+  sds = apply(meta_weights, MARGIN = 2,  FUN = sd)
+  mins = apply(meta_weights, MARGIN = 2, FUN = min)
+  maxs = apply(meta_weights, MARGIN = 2, FUN = max)
+  # Combine the stats into a single matrix.
+  sl_stats = cbind("mean(weight)" = means, "sd" = sds, "min" = mins, "max" = maxs)
+  # Sort by decreasing mean weight.
+  sl_stats[order(sl_stats[, 1], decreasing = TRUE), ]
+}
+
+# training model on set 4
+vars = fread("setB.variables.txt") %>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1")
+
+#outcome = vars%>%dplyr::select(CaCo)
+outcome = vars[,"CaCo"]
+
+vars_pred = vars %>% dplyr::select(-CaCo)
+  
+methyl = fread("setB.methyl.txt")%>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1") %>%
+  t %>%
+  as.data.frame()
+
+predictors = cbind(vars_pred,methyl) %>% as.data.frame()
+
+# Feature selection
+# library(parallel)
+# cl <- makeCluster(detectCores()-1, type="FORK")
+# 
+# listp <- parApply(cl,predictors, 2, function(x, Y) {
+#   corres = cor.test(x, y = Y, method = "pearson")
+#   return(c(p=corres$p.value,corres$estimate,variance=var(x)))
+#    }, Y = outcome)
+# 
+# listpDF = data.frame(listp) %>%
+#   t() %>%
+#   as.data.frame() %>%
+#   rownames_to_column(var="var") %>%
+#   arrange(p)
+# write_rds(listpDF,"feature_selection_res.rds")
+# stopCluster(cl)
+
+################################################################
+# predict on new data (set 2, A)
+vars_val = fread("setA.variables.txt") %>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1")
+outcome_val = vars_val[,"CaCo"]
+vars_val_pred = vars_val %>% dplyr::select(-CaCo)
+methyl_val = fread("setA.methyl.txt")%>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1") %>%
+  t %>%
+  as.data.frame()
+
+predictors_val = cbind(vars_val_pred,methyl_val) %>% as.data.frame()
+
+# SuperLearner
+# try at least the following models: glmnet, randomForest, XGBoost, SVM, and bartMachine
+##  tested with multiple hyperparameter settings for each algorithm.
+setwd("/project/wiemels_494/sebastian/ML/ALL")
+library(SuperLearner)
+library(tidyverse)
+library(data.table)
+
+#listWrappers()
+set.seed(528)
+
+feature_selection_res = read_rds("feature_selection_res.rds") %>%
+  mutate(logp = -log(p))
+summary(feature_selection_res)
+
+# think of a better way to select features 05052022
+hist(abs(feature_selection_res$cor))
+hist(-log(feature_selection_res$p))
+feature_selection_res = feature_selection_res %>%
+  filter(logp>median(feature_selection_res$logp),
+         abs(cor)>median(abs(cor)),
+         variance > median(variance))
+
+#predictors_select=predictors[,feature_selection_res[1:floor(nrow(vars)/5),"var"]]
+predictors_select=predictors[,feature_selection_res[1:(nrow(vars)*2),"var"]]
+predictors_val_select=predictors_val[,colnames(predictors_select)]
+
+# fit individual models
+options(mc.cores = RhpcBLASctl::get_num_cores()-1)
+#getOption("mc.cores")
+
+## Fit lasso model
+sl_lasso = mcSuperLearner(Y = outcome, 
+                          X = predictors_select, 
+                          family = binomial(),
+                          cvControl = list(stratifyCV=TRUE,V = 10),     
+                          method = "method.AUC",
+                          # method = "method.NNloglik" also works good for binary outcome
+                          SL.library = "SL.glmnet")
+
+pred = predict(sl_lasso, predictors_val_select, onlySL = TRUE)
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+
+## Fit random forest model (default parameters)
+sl_rf = mcSuperLearner(Y = outcome, X = predictors_select, 
+                     family = binomial(),
+                     cvControl = list(stratifyCV=TRUE,V = 10),     
+                     method = "method.AUC",
+                     SL.library = "SL.ranger")
+pred = predict(sl_rf, predictors_val_select, onlySL = TRUE)
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+### can edit to create a new method 
+# rf_learners = create.Learner("SL.ranger", params = list(num.trees = tree_num))
+#### new learner called learners$names will be created, which can be passed to SL.library
+### customize the defaults for random forest.
+(tree_num = c(200,1000,1500,2000))
+(mtry_seq = floor(sqrt(ncol(predictors_select)) * c(0.5, 1, 2)))
+rf_learners = create.Learner("SL.ranger", tune=list(mtry = mtry_seq,
+                                                    num.trees = tree_num), name_prefix = "rf")
+sl_rf_tune = mcSuperLearner(Y = outcome, X = predictors_select, 
+                     family = binomial(),
+                     cvControl = list(stratifyCV=TRUE,V = 10),     
+                     method = "method.AUC",
+                     SL.library = rf_learners$names)
+
+pred = predict(sl_rf_tune, predictors_val_select, onlySL = FALSE)
+
+plot(pred$library.predict[,"rf_10_All"], outcome_val)
+pred_rocr = ROCR::prediction(pred$library.predict[,"rf_10_All"], outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+## Fit XGBoost model
+sl_xgb_original = mcSuperLearner(Y = outcome, X = predictors_select, 
+                        family = binomial(),
+                        cvControl = list(stratifyCV=TRUE,V = 10),     
+                        method = "method.AUC",
+                        SL.library = "SL.xgboost")
+pred = predict(sl_xgb_original, predictors_val_select, onlySL = TRUE)
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+tune = list(ntrees = c(10, 20),max_depth = 1:2,shrinkage = c(0.001, 0.01))
+xgbLearners = create.Learner("SL.xgboost", tune = tune, 
+                          detailed_names = TRUE, name_prefix = "xgb")
+sl_xgb = mcSuperLearner(Y = outcome, X = predictors_select, 
+                        family = binomial(),
+                        method = "method.AUC",
+                        SL.library = xgbLearners$names)
+pred = predict(sl_xgb, predictors_val_select, onlySL = FALSE)
+
+plot(pred$library.predict[,"xgb_20_2_0.01_All"], outcome_val)
+pred_rocr = ROCR::prediction(pred$library.predict[,"xgb_20_2_0.01_All"], outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+#SVM
+sl_svm = mcSuperLearner(Y = outcome, X = predictors_select, 
+                     family = binomial(),
+                     cvControl = list(stratifyCV=TRUE,V = 10),     
+                     method = "method.AUC",
+                     SL.library = "SL.svm")
+pred = predict(sl_svm, predictors_val_select, onlySL = TRUE)
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+
+#bartMachine
+sl_bart = mcSuperLearner(Y = outcome, X = predictors_select, 
+                     family = binomial(),
+                     cvControl = list(stratifyCV=TRUE,V = 10),     
+                     method = "method.AUC",
+                     SL.library = "SL.bartMachine")
+pred = predict(sl_bart, predictors_val_select, onlySL = TRUE)
+plot(pred$pred, outcome_val)
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+## Fit multiple models, with mean as a benchmark (other methods should do better than mean)
+### we may choose the same model multiple times but with different settings
+cv_sl = CV.SuperLearner(Y = outcome, X = predictors_select, family = binomial(),
+  cvControl = list(V = 10,stratifyCV=TRUE), 
+  innerCvControl = list(list(V=5)),
+  parallel = "multicore",
+  method = "method.AUC", 
+  SL.library = c("SL.mean", "SL.glmnet", "SL.ranger","SL.svm","SL.xgboost","SL.bartMachine",
+                    rf_learners$names,xgbLearners$names)  
+  )
+
+summary(cv_sl)
+review_weights(cv_sl)
+# the distribution of the best single learner as external CV folds.
+table(simplify2array(cv_sl$whichDiscreteSL))
+# Plot the performance with 95% CIs
+##  "Discrete SL" chooses the best single learner
+## "Super Learner" takes a weighted average of the learners 
+plot(cv_sl) + theme_bw()
+ggsave("performance.superlearner.png",height=6, width=8)
+
+# fit the final super learner model
+sl = mcSuperLearner(Y = outcome, X = predictors_select, family = binomial(),
+  cvControl = list(stratifyCV=TRUE,V = 10),     
+  method = "method.AUC",
+  SL.library = c("SL.mean", "SL.glmnet", "SL.ranger","SL.svm","SL.xgboost","SL.bartMachine",
+                 rf_learners$names,xgbLearners$names))
+sl
+pred = predict(sl, predictors_val_select, onlySL = FALSE)
+
+png("sl.superlearner.png")
+plot(pred$pred, outcome_val)
+dev.off()
+
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+print(auc)
+
+################################################################
+# predict on new data (set 2, A)
+vars_val = fread("setA.variables.txt") %>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1")
+outcome_val = vars_val[,"CaCo"]
+vars_val_pred = vars_val %>% dplyr::select(-CaCo)
+methyl_val = fread("setA.methyl.txt")%>%
+  as.data.frame() %>%
+  column_to_rownames(var="V1") %>%
+  t %>%
+  as.data.frame()
+predictors_val = cbind(vars_val_pred,methyl_val) %>% as.data.frame()
+predictors_val_select=predictors_val[,colnames(predictors_select)]
+pred = predict(sl, predictors_val_select, onlySL = TRUE)
+
+# library(ggplot2)
+# qplot(pred$pred[, 1]) + theme_minimal()
+pred_rocr = ROCR::prediction(pred$pred, outcome_val)
+auc = ROCR::performance(pred_rocr, measure = "auc", x.measure = "cutoff")@y.values[[1]]
+auc
+
+```
+
+# Trainig machine learning models in python
+
+Set 4 as training set and set 3 as validation set; set 2 as another potential validation dataset
+1. Sesame imputed methylaiton data from sets 2,3,4
+2. CpGs with > median variance and top 10,000 correlation with ALL status from sets 2, 3 and 4
+3. train different NN models
+
+```{python methylation data cleaning}
+
+import multiprocessing
+multiprocessing.cpu_count()
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import pickle
+from tensorflow import keras
+
+# 20220602
+
+from scipy.stats.mstats import winsorize
+# show all columns when using the head option for pandas
+pd.set_option('display.max_columns', None)
+
+os.chdir('/ccls/home/sli/ML/ALL/nn')
+
+set2_meth = pyreadr.read_r('/ccls/home/sli/sets/set2/set2_Sesame_beta_imputed.rds')
+set2_meth = set2_meth[None]
+set2_meth = set2_meth.set_index('probeId')
+
+#set3_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set2/set2_Sesame_beta_imputed.rds')
+#set4_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set2/set2_Sesame_beta_imputed.rds')
+
+################################################
+# Set 3
+
+set3_clinical = pd.read_csv('/ccls/home/sli/sets/set3/clinical_variables.csv')
+set3_clinical = set3_clinical.set_index('beadPosition')
+#####################
+# limit to europeans, B cell, non downs
+
+## cases with B cells
+differn2 = pd.read_csv('/ccls/home/sli/sets/set3/subtypes_perinatal_differn2.csv').query("DIFFERN2=='B-cell'")
+b_cell_subs = list(differn2['blindid'])
+
+set3_clinical_filter= (
+    set3_clinical.query("Trisomy21==0")
+    .query("race==1")
+    .query("CaCo==0|subjectId==@b_cell_subs")
+)
+
+set3_meth = pyreadr.read_r('/ccls/home/sli/sets/set3/set3_Sesame_beta_imputed.rds')
+set3_meth = set3_meth[None]
+set3_meth = set3_meth.set_index('probeId')
+common = list(set(set3_clinical_filter.index)&set(set3_meth.columns))
+set3_meth_filter=set3_meth[common]
+
+# winsorization to remove outliers
+def winsorize_pd(s):
+    return winsorize(s, limits=[0.01, 0.01])
+
+set3_meth_filter_wins = set3_meth_filter.apply(winsorize_pd,axis=0)
+set3_clinical_filter = set3_clinical_filter.loc[common,['CaCo','sex']]
+
+################################################
+# Set 4
+
+set4_clinical = pd.read_csv('/ccls/home/sli/sets/set4/clinical_variables.csv')
+set4_clinical = set4_clinical.set_index('beadPosition')
+#####################
+# limit to europeans, B cell, non downs
+set4_clinical_filter= (
+    set4_clinical.query("smp_type=='bg'")
+    .query("`Trisomy21.cnm`==0")
+    .query("race==1")
+    .query("leuk_dx_type=='B'|CaCo==0")
+)
+
+set4_meth = pyreadr.read_r('/ccls/home/sli/sets/set4/set4_Sesame_beta_imputed.rds')
+set4_meth = set4_meth[None]
+set4_meth = set4_meth.set_index('probeId')
+common = list(set(set4_clinical_filter.index)&set(set4_meth.columns))
+
+set4_meth_filter=set4_meth[common]
+
+set4_meth_filter_wins = set4_meth_filter.apply(winsorize_pd,axis=0)
+set4_clinical_filter = set4_clinical_filter.loc[common,['CaCo','sex']]
+
+## Pick CpGs that are present in all three sets first
+commonCpGs = list(set(set2_meth.index)& 
+                  set(set3_meth_filter.index)&
+                  set(set4_meth_filter.index))
+# len(commonCpGs) = 353604
+commonCpGs = list(filter(lambda cpg: cpg.find('cg')!=-1,commonCpGs))
+# len(commonCpGs) = 352264
+
+# save files 
+## these include non-harmonized common CpGs of sets 3 and 4, as well as case control and sex information of subjects
+set3_meth_filter=set3_meth_filter_wins.loc[commonCpGs,:]
+set4_meth_filter=set4_meth_filter_wins.loc[commonCpGs,:]
+
+set3_meth_filter.to_csv("validation.methylation.csv")
+set3_clinical_filter.to_csv("validation.variable.csv")
+
+set4_meth_filter.to_csv("training.methylation.csv")
+set4_clinical_filter.to_csv("training.variable.csv")
+
+filehandler = open("commonCpGs.obj", 'wb') 
+pickle.dump(commonCpGs, filehandler)
+
+```
+
+```{python feature selection}
+
+# (1) drop CpGs with intereference from SNPs 
+# (2)select CpGs that are > median variance AND significantly associated 
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import pickle
+
+pd.set_option('display.max_columns', None)
+os.chdir('/ccls/home/sli/ML/ALL/tsf')
+ 
+#filehandler = open("commonCpGs.obj", 'rb') 
+#commonCpGs = pickle.load(filehandler)
+    
+train_methyl = pd.read_csv("training.methylation.csv")
+train_methyl = train_methyl.set_index("probeId")
+
+train_clinical = pd.read_csv("training.variable.csv")
+train_clinical = train_clinical.set_index("beadPosition")
+  
+# selec probes to drop due to MAF    
+annoEpic = pyreadr.read_r('/ccls/home/sli/ML/ALL/tsf/annoEPIC.rds')
+annoEpic = annoEpic[None]
+annoEpic_drop = (
+     annoEpic
+     .query("Probe_maf>=0.05|CpG_maf>=0.05")
+     .loc[:,'Name']
+)
+# len(annoEpic_drop) 89941
+
+# drop these probes from methylation data
+mask = list(train_methyl.index.isin(annoEpic_drop.values))
+train_methyl = train_methyl[[not elem for elem in mask]]
+# train_methyl.shape (322955, 129)
+
+# make sure colnames of train_methyl is identical to row names of train_clinical
+list(train_methyl.columns)==list(train_clinical.index)
+# True
+
+# calculate the variance and the correlation between CaCo for each remaining CpG
+var = train_methyl.var(axis=1)
+assoc = train_methyl.corrwith(train_clinical.loc[:,'CaCo'], axis=1,
+                              method='kendall')
+
+# to test if associations are computed correctly
+# np.corrcoef(train_methyl.loc['cg01750341'],train_clinical.loc[:,'CaCo'],method='kendall')
+
+## Combine two series.
+cpg_select=pd.concat([var,assoc],axis=1)
+cpg_select.columns = ['variance','association']
+
+#filehandler = open("cpg_select.obj", 'wb') 
+#pickle.dump(cpg_select, filehandler)
+#filehandler = open("cpg_select.obj", 'rb') 
+#cpg_select = pickle.load(filehandler)
+
+# select CpGs > median variance AND > median pearson
+# choosing 2*129=258 CpGs + sex as predicting variables
+cpg_selected = cpg_select[(cpg_select['variance']>cpg_select['variance'].median()) & 
+           (cpg_select['association']>cpg_select['association'].median())]\
+           .sort_values(by='association',ascending=False)\
+           .iloc[0:258]\
+           .index
+
+train_cpgs = train_methyl.loc[cpg_selected,:].transpose()
+# train_cpgs.shape (129, 258)
+
+train_df = pd.concat([train_clinical,train_cpgs],axis=1)
+# train_df.shape (129, 261)
+
+y_train = train_df['CaCo']
+# y_train.shape (129,)
+
+x_train = train_df.drop(['CaCo'],axis=1)
+# x_train.shape (129, 259)
+
+################################################
+################################################
+####get validation data ready
+val_methyl = pd.read_csv("validation.methylation.csv")
+val_methyl = val_methyl.set_index("probeId")
+val_clinical = pd.read_csv("validation.variable.csv")
+val_clinical = val_clinical.set_index("beadPosition")
+
+# extract CpGs
+mask = list(val_methyl.index.isin(x_train.columns))
+val_methyl_selected = val_methyl[mask].transpose()
+
+val_df = pd.concat([val_clinical,val_methyl_selected],axis=1)
+
+y_val = val_df['CaCo']
+# y_val.shape (163,)
+x_val = val_df.drop('CaCo',axis=1)
+# x_val.shape (163, 259)
+
+trainingValSet = list([x_train,y_train,x_val,y_val])
+
+filehandler = open("trainingValSet.obj", 'wb') 
+pickle.dump(trainingValSet, filehandler)
+
+# download this to /Users/bo/Documents/USC/Projects/Leukemia Machine Learning
+```
+
+```{python loading training and validation data sets}
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+pd.set_option('display.max_columns', None)
+
+#os.chdir('/ccls/home/sli/ML/ALL/tsf')
+os.chdir('/Users/bo/Documents/USC/Projects/Leukemia Machine Learning')
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+# data sets were already selected and normalized
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+
+## making the order of columns match that of x_train
+x_val = x_val[x_train.columns]
+y_val = trainingValSet[3]
+# list(x_train.columns)==list(x_val.columns) is true
+
+## choosing 39 cases and 39 controls in the validation set (so MAF is more accurate)
+conInd = random.sample(list(y_val[y_val==0].index),k=39)
+caseInd = random.sample(list(y_val[y_val==1].index),k=39)
+
+x_val = x_val.loc[conInd+caseInd]
+y_val = y_val.loc[conInd+caseInd]
+
+```
+
+```{python Logistic regression}
+
+from sklearn import linear_model
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import RepeatedStratifiedKFold
+from sklearn.metrics import mean_absolute_error
+import numpy as np
+
+reg = linear_model.LogisticRegression()
+# define models and parameters
+solver = ['liblinear']
+penalty = ['l1']
+c_values = [1000, 100, 10, 1.0, 0.1, 0.01] # Inverse of regularization strength
+
+# define grid search
+grid = dict(solver=solver,penalty=penalty,C=c_values)
+cv = RepeatedStratifiedKFold(n_splits=10, n_repeats=3, random_state=1)
+grid_search = GridSearchCV(estimator=reg, param_grid=grid, cv=cv, scoring='balanced_accuracy')
+
+grid_result = grid_search.fit(x_train,y_train)
+
+# summarize results
+print("Best: %f using %s" % (grid_result.best_score_, grid_result.best_params_))
+reg.set_params(C=grid_result.best_params_['C'],solver='liblinear',penalty='l1')
+reg.fit(x_train,y_train)
+
+preds = reg.predict(x_val)
+preds
+
+print(mean_absolute_error(y_val, preds))
+```
+
+```{python Lasso regression model}
+
+# reference: https://www.kirenz.com/post/2019-08-12-python-lasso-regression-auto/
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import Lasso, LassoCV
+from sklearn.preprocessing import minmax_scale 
+from sklearn.metrics import roc_curve, auc, precision_score
+from scipy.stats import ttest_ind
+
+# visualize alpha values
+
+alphas = np.linspace(0.0001,0.05,100)
+lasso = Lasso(max_iter=10000)
+coefs = []
+
+for a in alphas:
+    lasso.set_params(alpha=a)
+    lasso.fit(x_train, y_train)
+    coefs.append(lasso.coef_)
+
+ax = plt.gca()
+ax.plot(alphas, coefs)
+ax.set_xscale('log')
+plt.axis('tight')
+plt.xlabel('alpha')
+plt.ylabel('Standardized Coefficients')
+plt.title('Lasso coefficients as a function of alpha')
+
+# training a lasso model
+
+# cross validation to tune the best alpha
+model = LassoCV(cv=5, random_state=0, max_iter=10000)
+model.fit(x_train, y_train)
+
+plt.semilogx(model.alphas_, model.mse_path_, ":")
+plt.plot(
+    model.alphas_ ,
+    model.mse_path_.mean(axis=-1),
+    "k",
+    label="Average across the folds",
+    linewidth=2,
+)
+plt.axvline(
+    model.alpha_, linestyle="--", color="k", label="alpha: CV estimate"
+)
+plt.legend()
+plt.xlabel("alphas")
+plt.ylabel("Mean square error")
+plt.title("Mean square error on each fold")
+plt.axis("tight")
+
+#ymin, ymax = 50000, 250000
+#plt.ylim(ymin, ymax);
+
+# set parameter based on CV results
+lasso_best = Lasso(alpha=model.alpha_)
+lasso_best.fit(x_train, y_train)
+
+# find a propoer cut-off
+
+predict_train = lasso_best.predict(x_train)
+
+# box plot of the results
+ax = sns.boxplot(x=y_train, y=predict_train, whis=np.inf,palette=sns.color_palette("pastel"))
+ax = sns.swarmplot(x=y_train, y=predict_train)
+
+# roc curve and the optimal cutoff
+fpr, tpr, thresholds = roc_curve(y_train,predict_train)
+roc_auc = auc(fpr, tpr)
+
+optimal_idx = np.argmax(tpr - fpr)
+optimal_threshold = thresholds[optimal_idx]
+print(optimal_threshold)
+
+plt.figure()
+plt.plot(
+    fpr,
+    tpr,
+    color="red",
+    lw=2,
+    label="ROC curve (area = %0.4f)" % roc_auc,
+)
+plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+#plt.xlim([0.0, 1.0])
+#plt.ylim([0.0, 1.05])
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Receiver operating characteristic")
+plt.legend(loc="lower right")
+plt.show()
+
+# performance on the validation dataset
+preds = lasso_best.predict(x_val)
+
+# box plots
+ax = sns.boxplot(x=y_val, y=preds, whis=np.inf,palette=sns.color_palette("pastel"))
+ax = sns.swarmplot(x=y_val, y=preds)
+
+# t-test between prediction scores between caes and controls
+print("t-test comparing cases and controls in validation data set")
+print(ttest_ind(preds[y_val==0], preds[y_val==1]))
+
+# ROC curve for validation
+fpr, tpr, thresholds = roc_curve(y_val,preds)
+roc_auc = auc(fpr, tpr)
+
+plt.figure()
+plt.plot(
+    fpr,
+    tpr,
+    color="red",
+    lw=2,
+    label="ROC curve (area = %0.4f)" % roc_auc,
+)
+plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+#plt.xlim([0.0, 1.0])
+#plt.ylim([0.0, 1.05])
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Receiver operating characteristic in validation")
+plt.legend(loc="lower right")
+plt.show()
+
+# accuracy
+preds_bin = np.array(np.multiply(preds_norm>optimal_threshold,1))
+preds_bin
+
+print("precision score for all subjects")
+print(precision_score(np.array(y_val), preds_bin,average='micro'))
+
+print("precision score for controls")
+print(precision_score(y_val[y_val==0], preds_bin[y_val==0],average='micro'))
+
+print("precision score for cases")
+print(precision_score(y_val[y_val==1], preds_bin[y_val==1],average='micro'))
+```
+
+```{python Fit random forest models}
+
+# try both default parameters and tuning parameters
+
+import numpy as np
+from sklearn import metrics
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+
+# random forest with default parameter
+
+model = RandomForestClassifier(n_estimators=100, 
+    criterion='gini',random_state=0)
+
+model.fit(x_train, y_train)
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train =  model.predict(x_train)
+cm = metrics.confusion_matrix(y_train, pred_train, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print (model.score(x_train, y_train))
+
+print("performance on validation set")
+
+pred =  model.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print (model.score(x_val, y_val))
+
+# Tuning the Random Forest
+
+# random grid search
+
+# Number of trees in random forest
+n_estimators = np.linspace(100, 3000, int((3000-100)/200) + 1, dtype=int)
+# Number of features to consider at every split
+max_features = ['auto', 'sqrt']
+# Maximum number of levels in tree
+max_depth = [1, 5, 10, 20, 50, 75, 100, 150, 200]
+# Minimum number of samples required to split a node
+min_samples_split = [int(x) for x in np.linspace(start = 2, stop = 30, num = 20)]
+# Minimum number of samples required at each leaf node
+min_samples_leaf = [1, 2, 3, 4]
+# Method of selecting samples for training each tree
+bootstrap = [True, False]
+# Criterion
+criterion=['gini', 'entropy']
+random_grid = {'n_estimators': n_estimators,
+               'max_features': max_features,
+               'max_depth': max_depth,
+               'min_samples_split': min_samples_split,
+               'min_samples_leaf': min_samples_leaf,
+               'bootstrap': bootstrap,
+               'criterion': criterion}
+               
+
+rf_base = RandomForestClassifier()
+rf_random = RandomizedSearchCV(estimator = rf_base,
+                               param_distributions = random_grid,
+                               n_iter = 30, cv = 5,
+                               verbose=1,
+                               random_state=1, n_jobs = 8)
+rf_random.fit(x_train, y_train)
+
+#print (rf_random.score(x_train, y_train))
+#print(rf_random.score(x_val, y_val))
+
+# grid search
+param_grid = {
+    "min_samples_split": np.linspace(1,5,5,dtype=int),
+    'max_depth': [40, 60, 10],
+    'min_samples_leaf': [1,3,3],
+    'n_estimators': np.linspace(2500,300,10,dtype=int)
+}
+rf_grid = RandomForestClassifier(max_features='auto', criterion='entropy', bootstrap=True)
+rf_grid_search = GridSearchCV(estimator=rf_grid, param_grid=param_grid,
+                     cv = 5, n_jobs = 8, verbose = 1)
+rf_grid_search.fit(x_train, y_train)
+
+model = rf_grid_search.best_estimator_
+rf_grid_search.best_params_
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train =  model.predict(x_train)
+cm = metrics.confusion_matrix(y_train, pred_train, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print (model.score(x_train, y_train))
+
+
+print("performance on validation set")
+
+pred =  model.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print (model.score(x_val, y_val))
+```
+
+```{python XGBoost model}
+
+# also try both default parameters and tuning parameters
+
+from xgboost import XGBClassifier
+from sklearn.model_selection import cross_val_score
+
+# default parameters
+
+model = XGBClassifier(objective="binary:logistic")
+model.fit(x_train,y_train)
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train =  model.predict(x_train)
+cm = metrics.confusion_matrix(y_train, pred_train, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print (model.score(x_train, y_train))
+
+print("performance on validation set")
+
+pred =  model.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print (model.score(x_val, y_val))
+
+# tuning parameters
+
+xg_base = XGBClassifier(objective="binary:logistic")
+
+random_grid = {
+    "max_depth": np.linspace(1,20,10,dtype=int),
+    "learning_rate": np.linspace(0.001,0.3,100),
+    "gamma": np.linspace(0,1,100),
+    "reg_lambda": np.linspace(0,10,100),
+    "scale_pos_weight": np.linspace(1,10,10,dtype=int),
+    "subsample": np.linspace(0.1,0.9,20),
+    "colsample_bytree": np.linspace(0,1,20),
+}
+
+xg_random = RandomizedSearchCV(estimator = xg_base,
+                               param_distributions = random_grid,
+                               n_iter = 30, cv = 5,
+                               verbose=1,
+                               random_state=0, n_jobs = 8)
+                               
+xg_random.fit(x_train, y_train)
+
+##################### this block was done on HPC 
+# import os
+# import pickle
+# from xgboost import XGBClassifier
+# from sklearn.model_selection import RandomizedSearchCV, GridSearchCV, cross_val_score
+# os.chdir('/ccls/home/sli/ML/ALL/tsf')
+# filehandler = open("trainingValSet.obj", 'rb') 
+# trainingValSet = pickle.load(filehandler)
+# x_train = trainingValSet[0]
+# y_train = trainingValSet[1]
+
+xg_base = XGBClassifier(objective="binary:logistic")
+
+param_grid = {
+    "max_depth":[7,8,9,10,11],
+    "learning_rate": [0.15,0.2,0.25,0.3,0.35],
+    "gamma": [0.01,0.02,0.05,0.08,0.1],
+    "reg_lambda": [1,2,2.5,3,3.5],
+    "scale_pos_weight": [6,7,8],
+    "subsample": [0.1,0.3,0.5],
+    "colsample_bytree": [0.2,0.5,0.8,1],
+}
+
+xg_grid = GridSearchCV(estimator = xg_base,
+                        param_grid = param_grid,
+                        cv = 5, verbose=2,n_jobs = -1)
+
+xg_grid.fit(x_train, y_train)
+
+filehandler = open("xg_grid.obj", 'wb') 
+pickle.dump(xg_grid, filehandler)
+##################### 
+
+filehandler = open("intermediateObj/xg_grid.obj", 'rb') 
+xg_grid = pickle.load(filehandler)
+
+print(xg_grid.best_score_)
+
+model = xg_grid.best_estimator_
+xg_grid.best_params_
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train =  model.predict(x_train)
+cm = metrics.confusion_matrix(y_train, pred_train, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print (model.score(x_train, y_train))
+
+
+print("performance on validation set")
+
+pred =  model.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print (model.score(x_val, y_val))
+```
+
+```{python SVM}
+#  try both default parameters and tuning
+
+import numpy as np
+from sklearn import svm
+from sklearn import metrics
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+
+# default parameters
+
+model_default = svm.SVC()
+model_default.fit(x_train,y_train)
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train = model_default.predict(x_train)
+cm = metrics.confusion_matrix(y_train,pred_train)
+
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print(model_default.score(x_train,y_train))
+
+print("performance on validation set")
+
+pred =  model_default.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print(model_default.score(x_val, y_val))
+
+svc_base = svm.SVC()
+
+param_grid = {
+    'C': [0.1, 1, 10, 100],
+    'gamma' : [1, 0.1, 0.01, 0.001],
+    'kernel' : ['rbf', 'poly', 'sigmoid']
+}
+
+svc_grid = GridSearchCV(
+    estimator = svc_base,
+    param_grid = param_grid,
+    cv = 5, verbose = 1, n_jobs=-1
+)
+
+svc_grid.fit(x_train,y_train)
+
+model = svc_grid.best_estimator_
+svc_grid.best_params_
+
+# checking performance on training and validation sets
+
+print("performance on training set")
+
+pred_train =  model.predict(x_train)
+cm = metrics.confusion_matrix(y_train, pred_train, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the training set")
+print (model.score(x_train, y_train))
+
+print("performance on validation set")
+
+pred =  model.predict(x_val)
+cm = metrics.confusion_matrix(y_val, pred, labels=model.classes_)
+disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+disp.plot()
+plt.show()
+
+print("prediction score on the validation set")
+print (model.score(x_val, y_val))
+```
+
+```{python bartMachine}
+
+import xbart
+import seaborn as sns
+import numpy as np
+
+model_default = xbart.XBART()
+model_default.fit(x_train,y_train)
+
+# checking performance on training and validation sets
+pred_train = model_default.predict(x_train)
+
+# box plot of the results
+ax = sns.boxplot(x=y_train, y=pred_train, whis=np.inf, palette=sns.color_palette("pastel"))
+ax = sns.swarmplot(x=y_train, y=pred_train)
+
+# roc curve and the optimal cutoff
+fpr, tpr, thresholds = roc_curve(y_train,predict_train)
+roc_auc = auc(fpr, tpr)
+
+optimal_idx = np.argmax(tpr - fpr)
+optimal_threshold = thresholds[optimal_idx]
+print(optimal_threshold)
+
+plt.figure()
+plt.plot(
+    fpr,
+    tpr,
+    color="red",
+    lw=2,
+    label="ROC curve (area = %0.4f)" % roc_auc,
+)
+plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Receiver operating characteristic")
+plt.legend(loc="lower right")
+plt.show()
+
+# performance on the validation dataset
+preds = model_default.predict(x_val)
+
+# box plots
+ax = sns.boxplot(x=y_val, y=preds, whis=np.inf, palette=sns.color_palette("pastel"))
+ax = sns.swarmplot(x=y_val, y=preds)
+
+# t-test between prediction scores between caes and controls
+print("t-test comparing cases and controls in validation data set")
+print(ttest_ind(preds[y_val==0], preds[y_val==1]))
+
+# ROC curve for validation
+fpr, tpr, thresholds = roc_curve(y_val,preds)
+roc_auc = auc(fpr, tpr)
+
+plt.figure()
+plt.plot(
+    fpr,
+    tpr,
+    color="red",
+    lw=2,
+    label="ROC curve (area = %0.4f)" % roc_auc,
+)
+plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Receiver operating characteristic in validation")
+plt.legend(loc="lower right")
+plt.show()
+
+# accuracy
+preds_bin = np.array(np.multiply(preds>optimal_threshold,1))
+preds_bin
+
+print("precision score for all subjects")
+print(precision_score(np.array(y_val), preds_bin,average='micro'))
+
+print("precision score for controls")
+print(precision_score(y_val[y_val==0], preds_bin[y_val==0],average='micro'))
+
+print("precision score for cases")
+print(precision_score(y_val[y_val==1], preds_bin[y_val==1],average='micro'))
+```
+
+# Trainig neural network deep learning models in python
+
+* set 4 as training set and set 3 as validation set; set 2 as a supporting dataset to help with stable methylation correlation 
+
+1. Sesame imputed methylaiton data from sets 2,3,4
+2. CpGs with > median variance and top 10,000 correlation with ALL status from both sets 3 and 4
+3. train ML models using set 4 data
+4. validate ML results using set 2 data
+
+```{python Files preparation }
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import pickle
+from scipy.stats.mstats import winsorize
+
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+set2_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set2/set2_Sesame_beta_imputed.rds')
+set2_meth = set2_meth[None]
+set2_meth = set2_meth.set_index('probeId')
+
+################################################
+# Set 3
+
+set3_clinical = pd.read_csv('/project/wiemels_260/sebastian/sets/set3/clinical_variables.csv')
+set3_clinical = set3_clinical.set_index('beadPosition')
+#####################
+# limit to europeans, B cell, non downs
+
+## cases with B cells
+differn2 = pd.read_csv('/project/wiemels_260/sebastian/sets/set3/perinatal_differn2.csv').query("DIFFERN2=='B-cell'")
+b_cell_subs = list(differn2['blindid'])
+
+set3_clinical_filter= (
+    set3_clinical.query("Trisomy21==0")
+    .query("race==1")
+    .query("CaCo==0|subjectId==@b_cell_subs")
+)
+
+set3_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set3/set3_Sesame_beta_imputed.rds')
+set3_meth = set3_meth[None]
+set3_meth = set3_meth.set_index('probeId')
+common = list(set(set3_clinical_filter.index)&set(set3_meth.columns))
+set3_meth_filter=set3_meth[common]
+
+# winsorization to remove outliers
+def winsorize_pd(s):
+    return winsorize(s, limits=[0.01, 0.01])
+
+set3_meth_filter_wins = set3_meth_filter.apply(winsorize_pd,axis=1)
+set3_meth_filter_wins_df = pd.DataFrame(set3_meth_filter_wins.values.tolist(), index=set3_meth_filter_wins.index)
+set3_meth_filter_wins_df.columns = set3_meth_filter.columns
+
+set3_clinical_filter = set3_clinical_filter.loc[common,['CaCo','sex']]
+
+################################################
+# Set 4
+
+set4_clinical = pd.read_csv('/project/wiemels_260/sebastian/sets/set4/clinical_variables.csv')
+set4_clinical = set4_clinical.set_index('beadPosition')
+#####################
+# limit to europeans, B cell, non downs
+set4_clinical_filter= (
+    set4_clinical.query("smp_type=='bg'")
+    .query("`Trisomy21.cnm`==0")
+    .query("race==1")
+    .query("leuk_dx_type=='B'|CaCo==0")
+)
+
+set4_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set4/set4_Sesame_beta_imputed.rds')
+set4_meth = set4_meth[None]
+set4_meth = set4_meth.set_index('probeId')
+common = list(set(set4_clinical_filter.index)&set(set4_meth.columns))
+
+set4_meth_filter=set4_meth[common]
+
+set4_meth_filter_wins = set4_meth_filter.apply(winsorize_pd,axis=1)
+set4_meth_filter_wins_df = pd.DataFrame(set4_meth_filter_wins.values.tolist(), index=set4_meth_filter_wins.index)
+set4_meth_filter_wins_df.columns = set4_meth_filter.columns
+
+set4_clinical_filter = set4_clinical_filter.loc[common,['CaCo','sex']]
+
+## these include common CpGs of sets 3 and 4, as well as case control and sex information of subjects
+#validation.methylation: set3_meth_filter
+#validation.variable: set3_clinical_filter
+#training.methylation: set4_meth_filter
+#training.variable: set4_clinical_filter
+
+# selec probes to drop due to MAF  
+annoEpic = pyreadr.read_r('/project/wiemels_494/sebastian/ML/ALL/tsf/annoEPIC.rds')
+annoEpic = annoEpic[None]
+annoEpic_drop = (
+     annoEpic
+     .query("Probe_maf>=0.05|CpG_maf>=0.05")
+     .loc[:,'Name']
+)
+# len(annoEpic_drop) 89941
+# list(annoEpic_drop)
+
+## Pick CpGs that are present in all three sets first
+commonCpGs = list(set(set2_meth.index)& 
+                  set(set3_meth_filter.index)&
+                  set(set4_meth_filter.index))
+# len(commonCpGs) = 353604
+commonCpGs = list(filter(lambda cpg: cpg.find('cg')!=-1,commonCpGs))
+# len(commonCpGs) = 352264
+
+commonCpGs_1 = commonCpGs.copy()
+
+# drop these probes from commonCpGs
+commonCpGs_1 = [elem for elem in commonCpGs if elem not in list(annoEpic_drop)]
+
+# print("common cpgs length")
+# print(len(commonCpGs_1)): 322955
+
+val_methyl=set3_meth_filter_wins_df.loc[commonCpGs_1,:]
+train_methyl=set4_meth_filter_wins_df.loc[commonCpGs_1,:]
+# train_methyl.shape (322955, 129)
+
+# make sure colnames of train_methyl is identical to row names of set4_clinical_filter
+list(train_methyl.columns)==list(set4_clinical_filter.index)
+# True
+
+train_cpgs = train_methyl.transpose()
+train_df = pd.concat([set4_clinical_filter,train_cpgs],axis=1)
+
+y_train = train_df['CaCo']
+x_train = train_df.drop(['CaCo'],axis=1)
+
+#get validation data ready
+val_methyl_selected = val_methyl.transpose()
+val_df = pd.concat([set3_clinical_filter,val_methyl_selected],axis=1)
+
+y_val = val_df['CaCo']
+x_val = val_df.drop('CaCo',axis=1)
+
+trainingValSet = list([x_train,y_train,x_val,y_val])
+
+# save files 
+
+filehandler = open("commonCpGs_1.obj", 'wb') 
+pickle.dump(commonCpGs_1, filehandler)
+
+filehandler = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/trainingValSet.obj", 'wb') 
+pickle.dump(trainingValSet, filehandler)
+```
+
+```{python slurm script template}
+
+#cd /project/wiemels_494/sebastian/ML/ALL
+#sbatch /project/wiemels_494/sebastian/ML/ALL/codes/temp.sh
+  
+
+## creating a conda environment
+
+# module load anaconda3
+# conda init bash
+# source ~/.bashrc
+# conda config --set auto_activate_base false
+
+# mamba create --name tf-gpu
+conda activate tf-gpu
+
+#To deactivate an environment
+conda deactivate
+
+## Running Anaconda in batch mode
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16GB
+#SBATCH --job-name=ml
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:v100:1
+module purge
+eval "$(conda shell.bash hook)"
+conda activate tf-gpu
+python3 /project/wiemels_494/sebastian/ML/ALL/codes/temp.py
+
+```
+
+```{python Basic neural network model}
+
+# prepare set 2 (test set) x and y
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import pickle
+from scipy.stats.mstats import winsorize
+
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+set2_clinical = pd.read_csv('/project/wiemels_260/sebastian/sets/set2/clinical_variables.csv')
+set2_clinical = set2_clinical.set_index('beadPosition')
+
+set2_clinical_filter = (
+    set2_clinical.query("`Trisomy21.cnm`==0")
+    .query("leuk_dx_type=='B'|CaCo==0")
+)
+
+# set2_clinical_filter.shape (382,111)
+
+set2_meth = pyreadr.read_r('/project/wiemels_260/sebastian/sets/set2/set2_Sesame_beta_imputed.rds')
+set2_meth = set2_meth[None]
+set2_meth = set2_meth.set_index('probeId')
+
+common = list(set(set2_clinical_filter.index)&set(set2_meth.columns))
+
+filehandler = open("commonCpGs_1.obj", 'rb') 
+commonCpGs_1 = pickle.load(filehandler)
+# len(commonCpGs_1) 322955
+
+set2_meth_filter=set2_meth.loc[commonCpGs_1,common]
+# set2_meth_filter.shape (322955, 372)
+
+# winsorization to remove outliers
+def winsorize_pd(s):
+    return winsorize(s, limits=[0.01, 0.01])
+
+set2_meth_filter_wins = set2_meth_filter.apply(winsorize_pd,axis=1)
+set2_meth_filter_wins_df = pd.DataFrame(set2_meth_filter_wins.values.tolist(), index=set2_meth_filter_wins.index, columns=set2_meth_filter.columns)
+
+set2_clinical_filter = set2_clinical_filter.loc[common,['CaCo','sex']]
+
+test_cpgs = set2_meth_filter_wins_df.transpose()
+test_df = pd.concat([set2_clinical_filter,test_cpgs],axis=1)
+
+y_test = test_df['CaCo']
+x_test = test_df.drop(['CaCo'],axis=1)
+
+testValSet = list([x_test,y_test])
+
+filehandler = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/testValSet.obj", 'wb') 
+pickle.dump(testValSet, filehandler)
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# 124 controls and 39 cases. choose 39 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:39,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+
+## making sure the order of columns x_train and x_val are identical
+list(x_train.columns)==list(x_val.columns)
+
+## a very simple version of NN
+checkpoint_path = 'intermediateObj'
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=200)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])*2
+class_weight = {0: weight_for_0, 1: weight_for_1}
+
+model = keras.Sequential([
+    layers.Dense(2048, activation='relu', input_shape=[x_train.shape[1]]),
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(2048, activation='relu'),
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(1024, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.BatchNormalization(),
+    layers.Dense(256, activation='relu'),
+    layers.Dense(1,activation='sigmoid'),
+])
+
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+history = model.fit(
+    x_train, y_train,
+    validation_data=(x_val, y_val),
+    batch_size=300,
+    epochs=1000,
+    verbose=0,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("intermediateObj/history_frame.csv")
+
+model.save('intermediateObj/model.h5')
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+    
+# examine the loss and metric plots
+#model = load_model('intermediateObj/model.h5') 
+history_frame = pd.read_csv("intermediateObj/history_frame.csv")
+
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss.png')
+
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc.png')
+
+
+```
+
+```{python check the performance on sets 2,3,4 respectively}
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+# load trained model
+model = keras.models.load_model('intermediateObj/model.h5')
+
+# predict model on different sets
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+pred_train = model.predict(x_train)
+pred_val = model.predict(x_val)
+pred_test = model.predict(x_test)
+pred_res = list([pred_train,pred_val,pred_test])
+
+filehandler = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/pred_res.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+####################################
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/pred_res.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+pred_test = pred_res[2]
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+# figures and tables showing concordance
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+test_res = pd.DataFrame({'y_test':y_test, 'pred_test':pred_test[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.png')
+
+sns.boxplot(x='y_test',y='pred_test',data=test_res)
+plt.pyplot.savefig('pred.res.test.png')
+
+```
+
+```{python convolutional nerural network}
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+# reshape training data to 3D for CNN input
+## Conv1D layer expects input shape in 3D as [batch_size, time_steps, input_dimension]
+sample_size = x_train.shape[0]
+time_steps = x_train.shape[1]
+input_dimension = 1
+x_train_reshaped = x_train.values.reshape(sample_size,time_steps,input_dimension)
+
+# 124 controls and 39 cases. choose 39 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:39,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+sample_size_val = x_val.shape[0]
+x_val_reshaped = x_val.values.reshape(sample_size_val,time_steps,input_dimension)
+
+checkpoint_path = 'intermediateObj'
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=200)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])*2
+class_weight = {0: weight_for_0, 1: weight_for_1}
+
+## a very simple version of CNN
+
+model = keras.Sequential([
+    layers.Conv1D(filters=500, kernel_size=50, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.Dropout(0.3),
+    layers.Conv1D(filters=300, kernel_size=30, activation="relu"),
+    layers.Dropout(0.3),    
+    layers.MaxPooling1D(),
+    layers.Flatten(),
+    layers.Dense(128, activation='softmax'),
+    layers.Dropout(0.3),
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(32, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(1,activation='sigmoid'),
+])
+
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=1000,
+    verbose=0,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("intermediateObj/history_frame_cnn.csv")
+
+model.save('intermediateObj/model_cnn.h5')
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+    
+# examine the loss and metric plots
+#model = load_model('intermediateObj/model.h5') 
+history_frame = pd.read_csv("intermediateObj/history_frame_cnn.csv")
+
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_cnn.png')
+
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_cnn.png')
+```
+
+```{python check the performance on sets 2,3,4 respectively}
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+# load trained model
+model = keras.models.load_model('intermediateObj/model_cnn.h5')
+
+# predict model on different sets
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_train_reshaped = x_train.values.reshape(x_train.shape[0],x_train.shape[1],1)
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+x_val_reshaped = x_val.values.reshape(x_val.shape[0],x_val.shape[1],1)
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+x_test_reshaped = x_test.values.reshape(x_test.shape[0],x_test.shape[1],1)
+
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_test = model.predict(x_test_reshaped)
+pred_res = list([pred_train,pred_val,pred_test])
+
+filehandler = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/pred_res_cnn.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+```
+
+```{python check the performance on sets 2,3,4 respectively (2)}
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/pred_res_cnn.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+pred_test = pred_res[2]
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+# figures and tables showing concordance
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+test_res = pd.DataFrame({'y_test':y_test, 'pred_test':pred_test[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.cnn.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.cnn.png')
+
+sns.boxplot(x='y_test',y='pred_test',data=test_res)
+plt.pyplot.savefig('pred.res.test.cnn.png')
+```
+
+```{python Recurrent neural network}
+
+import os
+import numpy as np
+import pandas as pd
+import pyreadr
+import random
+import pickle
+import h5py
+import matplotlib
+import seaborn
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+sample_size = x_train.shape[0]
+time_steps = x_train.shape[1]
+input_dimension = 1
+x_train_reshaped = x_train.values.reshape(sample_size,time_steps,input_dimension)
+
+# 124 controls and 39 cases. choose 39 cases and controls from validation set to be the real validation set
+Selected_controls = y_val[y_val==0].iloc[0:39,].index
+All_cases = y_val[y_val==1].index
+all_ind = Selected_controls.union(All_cases)
+x_val = x_val.loc[all_ind]
+y_val = y_val.loc[all_ind]
+
+sample_size_val = x_val.shape[0]
+x_val_reshaped = x_val.values.reshape(sample_size_val,time_steps,input_dimension)
+
+counts = y_train.value_counts()
+weight_for_0 = 1.0 / counts[0]
+weight_for_1 = (1.0 / counts[1])
+class_weight = {0: weight_for_0, 1: weight_for_1}
+checkpoint_path = 'intermediateObj'
+
+cp_callback = keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                              save_weights_only=True,
+                                              verbose=1)
+early_stopping=EarlyStopping(patience=10)
+
+## simple RNN
+model = keras.Sequential([
+    layers.SimpleRNN(350, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=10,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("intermediateObj/history_frame_SimpleRNN.csv")
+model.save('intermediateObj/model_SimpleRNN.h5')
+
+## LSTM
+model = keras.Sequential([
+    layers.LSTM(350, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=100,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("intermediateObj/history_frame_LSTM.csv")
+model.save('intermediateObj/model_LSTM.h5')
+
+# GRU
+model = keras.Sequential([
+    layers.GRU(350, activation="relu", input_shape=(time_steps,input_dimension)),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),    
+    layers.Dropout(0.3),
+    layers.Dense(218, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(64, activation='relu'),    
+    layers.Dropout(0.3),    
+    layers.Dense(32, activation='relu'),    
+    layers.Dense(1,activation='sigmoid'),
+])
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy'],
+)
+history = model.fit(
+    x_train_reshaped, y_train,
+    validation_data=(x_val_reshaped, y_val),
+    epochs=100,
+    verbose=0,
+    batch_size=10,
+    callbacks=[early_stopping,cp_callback], 
+    class_weight=class_weight,
+)
+history_frame = pd.DataFrame(history.history)
+history_frame.to_csv("intermediateObj/history_frame_GRU.csv")
+model.save('intermediateObj/model_GRU.h5')
+
+
+############
+import os
+import matplotlib.pyplot as plt
+import scipy
+import seaborn as sns
+sns.set()
+
+# examine training procedure
+os.chdir('/project/wiemels_494/sebastian/eyeDisease/NN')
+    
+# examine the loss and metric plots
+history_frame = pd.read_csv("intermediateObj/history_frame_SimpleRNN.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_SimpleRNN.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_SimpleRNN.png')
+
+history_frame = pd.read_csv("intermediateObj/history_frame_LSTM.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_LSTM.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_LSTM.png')
+
+history_frame = pd.read_csv("intermediateObj/history_frame_GRU.csv")
+history_frame.loc[:, ['loss', 'val_loss']].plot()
+plt.savefig('loss.val_loss_GRU.png')
+history_frame.loc[:, ['accuracy', 'val_accuracy']].plot();
+plt.savefig('acc.val_acc_GRU.png')
+ 
+```
+
+```{python check the performance on sets 2,3,4 respectively}
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import seaborn
+import h5py
+import pickle
+from tensorflow import keras
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+
+# loading files
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+# predict model on different sets
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+
+x_train_reshaped = x_train.values.reshape(x_train.shape[0],x_train.shape[1],1)
+
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+x_val_reshaped = x_val.values.reshape(x_val.shape[0],x_val.shape[1],1)
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+x_test_reshaped = x_test.values.reshape(x_test.shape[0],x_test.shape[1],1)
+
+# load trained model: simple RNN
+model = keras.models.load_model('intermediateObj/model_SimpleRNN.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_test = model.predict(x_test_reshaped)
+pred_res = list([pred_train,pred_val,pred_test])
+
+filehandler = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/pred_res_SimpleRNN.obj", 'wb') 
+pickle.dump(pred_res, filehandler)
+
+# load trained model: LSTM
+model = keras.models.load_model('intermediateObj/model_LSTM.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_test = model.predict(x_test_reshaped)
+pred_res = list([pred_train,pred_val,pred_test])
+
+filehandler2 = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/pred_res_LSTM.obj", 'wb') 
+pickle.dump(pred_res, filehandler2)
+
+# load trained model: GRU
+model = keras.models.load_model('intermediateObj/model_GRU.h5')
+pred_train = model.predict(x_train_reshaped)
+pred_val = model.predict(x_val_reshaped)
+pred_test = model.predict(x_test_reshaped)
+pred_res = list([pred_train,pred_val,pred_test])
+
+filehandler3 = open("/project/wiemels_494/sebastian/ML/ALL/tsf/intermediateObj/pred_res_GRU.obj", 'wb') 
+pickle.dump(pred_res, filehandler3)
+
+```
+
+```{python check the performance on sets 2,3,4 respectively (2) }
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib as plt
+import seaborn as sns
+import pickle
+
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+pd.set_option('display.max_columns', None)
+os.chdir('/project/wiemels_494/sebastian/ML/ALL/tsf')
+
+filehandler = open("intermediateObj/trainingValSet.obj", 'rb') 
+trainingValSet = pickle.load(filehandler)
+x_train = trainingValSet[0]
+y_train = trainingValSet[1]
+x_val = trainingValSet[2]
+y_val = trainingValSet[3]
+
+filehandler = open("intermediateObj/testValSet.obj", 'rb') 
+testValSet = pickle.load(filehandler)
+x_test = testValSet[0]
+y_test = testValSet[1]
+
+# figures and tables showing concordance
+## SimpleRNN
+filehandler = open("intermediateObj/pred_res_SimpleRNN.obj", 'rb') 
+pred_res = pickle.load(filehandler)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+pred_test = pred_res[2]
+
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+test_res = pd.DataFrame({'y_test':y_test, 'pred_test':pred_test[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.SimpleRNN.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.SimpleRNN.png')
+
+sns.boxplot(x='y_test',y='pred_test',data=test_res)
+plt.pyplot.savefig('pred.res.test.SimpleRNN.png')
+
+## LSTM
+filehandler2 = open("intermediateObj/pred_res_LSTM.obj", 'rb') 
+pred_res = pickle.load(filehandler2)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+pred_test = pred_res[2]
+
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+test_res = pd.DataFrame({'y_test':y_test, 'pred_test':pred_test[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.LSTM.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.LSTM.png')
+
+sns.boxplot(x='y_test',y='pred_test',data=test_res)
+plt.pyplot.savefig('pred.res.test.LSTM.png')
+
+## GRU
+filehandler3 = open("intermediateObj/pred_res_GRU.obj", 'rb') 
+pred_res = pickle.load(filehandler3)
+pred_train = pred_res[0]
+pred_val = pred_res[1]
+pred_test = pred_res[2]
+
+train_res = pd.DataFrame({'y_train':y_train, 'pred_train':pred_train[:,0]})
+val_res = pd.DataFrame({'y_val':y_val, 'pred_val':pred_val[:,0]})
+test_res = pd.DataFrame({'y_test':y_test, 'pred_test':pred_test[:,0]})
+
+sns.boxplot(x='y_train',y='pred_train',data=train_res)
+plt.pyplot.savefig('pred.res.train.GRU.png')
+
+sns.boxplot(x='y_val',y='pred_val',data=val_res)
+plt.pyplot.savefig('pred.res.val.GRU.png')
+
+sns.boxplot(x='y_test',y='pred_test',data=test_res)
+plt.pyplot.savefig('pred.res.test.GRU.png')
+```
+

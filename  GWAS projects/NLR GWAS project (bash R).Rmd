@@ -1,0 +1,503 @@
+---
+title: "NLR"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: GWAS on the associations between neutrophil/lymphocyte ratio and SNPs
+
+
+```{r create a master file for all subject's information}
+library(tidyverse)
+library(data.table)
+library(RNOmni)
+setwd("/ccls/home/sli/GWAS/NLR")
+
+## Set 1 fam files and IDs
+
+sub1 <- read.csv("/ccls/home/sli/sets/set1/clinical_variables.csv") %>%
+  select(beadPosition,subjectId) 
+phenotype1 <- read.csv("~/sets/set1/idol_deconvolution.csv")  %>%
+  as.data.frame() %>%
+  dplyr::mutate(NLR = Gran/(CD8T+CD4T+Bcell)) %>%
+  dplyr::mutate(NLRint = RNOmni::rankNormal(NLR)) %>%
+  select(beadPosition,NLRint) %>%
+  inner_join(sub1, by = "beadPosition")  %>%
+  select(-beadPosition)   
+
+set1.eur = fread("/ccls/home/sli/GWAS/bcell/ccls.set1.eur.fam")%>%
+  left_join(phenotype1,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+set1.lat = fread("/ccls/home/sli/GWAS/bcell/ccls.set1.lat.fam")%>%
+  left_join(phenotype1,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+write.table(gen1.eur, "set1.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen1.lat, "set1.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+## Set 2 fam files and IDs
+
+sub2 <- read.csv("/ccls/home/sli/sets/set2/clinical_variables.csv") %>%
+  select(beadPosition,subjectId)
+phenotype2 <- read.csv("~/sets/set2/idol_deconvolution.csv")  %>%
+  as.data.frame() %>%
+  dplyr::mutate(NLR = Gran/(CD8T+CD4T+Bcell)) %>%
+  dplyr::mutate(NLRint = RNOmni::rankNormal(NLR)) %>%
+  select(beadPosition,NLRint) %>%
+  inner_join(sub2, by = "beadPosition")  %>%
+  select(-beadPosition)   
+
+set2.eur = fread("/ccls/home/sli/GWAS/bcell/ccls.set2.eur.fam")%>%
+  left_join(phenotype2,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+set2.lat = fread("/ccls/home/sli/GWAS/bcell/ccls.set2.lat.fam")%>%
+  left_join(phenotype2,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+write.table(set2.eur, "set2.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(set2.lat, "set2.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+## Set 3 fam files and IDs
+
+sub3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0) %>%
+  select(beadPosition,subjectId)
+phenotype3 <- read.csv("~/sets/set3/idol_deconvolution.csv")  %>%
+  as.data.frame() %>%
+  dplyr::mutate(NLR = Gran/(CD8T+CD4T+Bcell)) %>%
+  dplyr::mutate(NLRint = RNOmni::rankNormal(NLR)) %>%
+  select(beadPosition,NLRint) %>%
+  inner_join(sub3, by = "beadPosition")  %>%
+  select(-beadPosition)   
+
+set3.eur = fread("/ccls/home/sli/GWAS/bcell/ccls.set3.eur.fam")%>%
+  left_join(phenotype3,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+set3.lat = fread("/ccls/home/sli/GWAS/bcell/ccls.set3.lat.fam")%>%
+  left_join(phenotype3,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+  
+write.table(gen3.eur, "set3.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen3.lat, "set3.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+## Set 4 fam files and IDs
+
+sub4 <- read.csv("/ccls/home/sli/sets/set4/clinical_variables.csv") %>%
+  filter(smp_type == "bg") %>%
+  distinct(subjectId,.keep_all=TRUE) %>%
+  select(beadPosition,subjectId)
+
+phenotype4 <- read.csv("~/sets/set4/idol_deconvolution.csv")  %>%
+  as.data.frame() %>%
+  dplyr::mutate(NLR = Gran/(CD8T+CD4T+Bcell)) %>%
+  dplyr::mutate(NLRint = RNOmni::rankNormal(NLR)) %>%
+  select(beadPosition,NLRint) %>%
+  inner_join(sub4, by = "beadPosition")  %>%
+  select(-beadPosition)   
+
+set4.eur = fread("/ccls/home/sli/GWAS/bcell/ccls.set4.eur.fam")%>%
+  left_join(phenotype4,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+set4.lat = fread("/ccls/home/sli/GWAS/bcell/ccls.set4.lat.fam")%>%
+  left_join(phenotype4,by=c("V2"="subjectId")) %>%
+  select(V1, V2, V3, V4, V5, NLRint)
+
+
+write.table(gen4.eur, "set4.eur.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(gen4.lat, "set4.lat.fam", sep='\t', 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+```{r visualizing of NLR distribution}
+
+library(tidyverse)
+library(data.table)
+
+setwd("/ccls/home/sli/GWAS/NLR")
+  
+for (SET in c("set1","set2","set3","set4")){
+  for (RACE in c("eur","lat")){
+
+  bcell <- read.table(paste0(SET,".",RACE,".fam")) 
+  
+  bcell %>%
+    select(V6) %>%
+    na.omit() %>%
+    ggplot(aes(x=V6)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle(paste0("Distribution of NLR in ", SET, " of " ,RACE))+
+    xlab("NLR") +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.text.x = element_blank()) 
+  ggsave(paste0("NLR.DST",SET,RACE,".png"),width = 5,height = 5)}
+  
+  }
+
+```
+
+```{bash NLR analysis}
+
+cd /ccls/home/sli/GWAS/NLR
+
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "eur" "lat"; do
+    plink2 --bfile /ccls/home/sli/GWAS/bcell/ccls.$set.$race\
+    --fam $set.$race.fam\
+    --covar /ccls/home/sli/GWAS/bcell/temp/ccls."${set}"."${race}".pca.eigenvec\
+    --threads 200\
+    --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+    --out ccls."${set}"."${race}".NLR
+  done
+done
+
+# step 10.1.2 Meta-analysis
+cd /ccls/home/sli/GWAS/NLR
+
+  metal
+  MARKER ID
+  EFFECT BETA
+  PVALUE P
+  SCHEME STDERR
+  STDERR SE
+  ALLELELABELS REF ALT1
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS ccls.set1.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set2.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set3.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set4.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set1.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set2.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set3.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set4.lat.NLR.PHENO1.glm.linear
+  ANALYZE HETEROGENEITY
+  QUIT
+  
+  mv METAANALYSIS1.TBL meta.ccls.NLR.TBL
+  mv METAANALYSIS1.TBL.info ccls.NLR.TBL.info
+  
+ awk '$6<5E-8{print}' meta.ccls.NLR.TBL
+
+```  
+
+```{r visualization}
+setwd("/ccls/home/sli/GWAS/NLR")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("ccls.set1.eur.NLR.PHENO1.glm.linear",
+         "ccls.set2.eur.NLR.PHENO1.glm.linear",
+         "ccls.set3.eur.NLR.PHENO1.glm.linear",
+         "ccls.set4.eur.NLR.PHENO1.glm.linear",
+         "ccls.set1.lat.NLR.PHENO1.glm.linear",
+         "ccls.set2.lat.NLR.PHENO1.glm.linear",
+         "ccls.set3.lat.NLR.PHENO1.glm.linear",
+         "ccls.set4.lat.NLR.PHENO1.glm.linear",
+         "meta.ccls.NLR.TBL")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) %>% na.omit()
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(gsub("chr","",as.character(CHROM))),POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.numeric(as.character(`#CHROM`)), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID")
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P)
+  dev.off()
+}
+# 
+# [1] "lambda value of ccls.set1.eur.NLR.PHENO1.glm.linear is: 1.02173424958845"
+# [1] "lambda value of ccls.set2.eur.NLR.PHENO1.glm.linear is: 0.999482221583302"
+# [1] "lambda value of ccls.set3.eur.NLR.PHENO1.glm.linear is: 0.962219814932119"
+# [1] "lambda value of ccls.set4.eur.NLR.PHENO1.glm.linear is: 1.00340539669486"
+# [1] "lambda value of ccls.set1.lat.NLR.PHENO1.glm.linear is: 1.00326041397532"
+# [1] "lambda value of ccls.set2.lat.NLR.PHENO1.glm.linear is: 1.00095677039124"
+# [1] "lambda value of ccls.set3.lat.NLR.PHENO1.glm.linear is: 0.998125728132205"
+# [1] "lambda value of ccls.set4.lat.NLR.PHENO1.glm.linear is: 0.998284149665314"
+# [1] "lambda value of meta.ccls.NLR.TBL is: 1.00280218184321"
+
+```
+
+some hits in chr 1, do a locus zoom plot
+
+```{bash locus zoom}
+
+cd /ccls/home/sli/GWAS/NLR
+
+
+# merge eur, lat and all subs
+## all subs
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set1\
+  --bmerge /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set2\
+  --make-bed\
+  --out /ccls/proj_circle2_p3/users/sebastian/bySET/tmp/ccls.gwas.12
+
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/tmp/ccls.gwas.12\
+  --bmerge ~/sets/set3/genetics/ccls.set3.hg38\
+  --make-bed\
+  --out /ccls/proj_circle2_p3/users/sebastian/bySET/tmp/ccls.gwas.123
+
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/tmp/ccls.gwas.123\
+  --bmerge /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4\
+  --make-bed\
+  --out /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas
+
+## Eur subs
+race="eur"
+cat /ccls/home/sli/GWAS/bcell/set*.$race.id.txt > /ccls/home/sli/GWAS/bcell/$race.id.txt
+plink2 --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas\
+  --keep /ccls/home/sli/GWAS/bcell/$race.id.txt\
+  --make-bed\
+  --out /ccls/home/sli/GWAS/bcell/ccls.$race
+
+## Lat subs
+race="lat"
+cat /ccls/home/sli/GWAS/bcell/set*.$race.id.txt > /ccls/home/sli/GWAS/bcell/$race.id.txt
+plink2 --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas\
+  --keep /ccls/home/sli/GWAS/bcell/$race.id.txt\
+  --make-bed\
+  --out /ccls/home/sli/GWAS/bcell/ccls.$race
+
+# meta-analysis of eur and lat separately
+cd /ccls/home/sli/GWAS/NLR
+
+  metal
+  MARKER ID
+  EFFECT BETA
+  PVALUE P
+  SCHEME STDERR
+  STDERR SE
+  ALLELELABELS REF ALT1
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS ccls.set1.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set2.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set3.eur.NLR.PHENO1.glm.linear
+  PROCESS ccls.set4.eur.NLR.PHENO1.glm.linear
+  ANALYZE HETEROGENEITY
+  QUIT
+  
+  mv METAANALYSIS1.TBL meta.eur.NLR.TBL
+  awk '$6<5E-8{print $1,$6}' meta.eur.NLR.TBL
+
+
+  metal
+  MARKER ID
+  EFFECT BETA
+  PVALUE P
+  SCHEME STDERR
+  STDERR SE
+  ALLELELABELS REF ALT1
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS ccls.set1.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set2.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set3.lat.NLR.PHENO1.glm.linear
+  PROCESS ccls.set4.lat.NLR.PHENO1.glm.linear
+  ANALYZE HETEROGENEITY
+  QUIT
+  
+  mv METAANALYSIS1.TBL meta.lat.NLR.TBL
+  awk '$6<5E-8{print $1,$6}' meta.lat.NLR.TBL
+
+  awk 'NR==1; $1 ~ /^chr1:/ {print}' meta.ccls.NLR.TBL > meta.chr1.NLR.logistic
+  
+  awk 'NR==1; $1 ~ /^chr1:/ {print}' meta.eur.NLR.TBL > meta.eur.chr1.NLR.logistic
+
+  awk 'NR==1; $1 ~ /^chr1:/ {print}' meta.lat.NLR.TBL > meta.lat.chr1.NLR.logistic
+
+```      
+
+```{bash}
+# running locuszoom on eur, lat and both
+## both
+cd /ccls/home/sli/GWAS/NLR
+# chr1:199150288:G:T has the smallest p value in all subjects
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas\
+  --allow-no-sex\
+  --ld-window-kb 500\
+  --ld-snps chr1:199150288:G:T\
+  --r2 dprime \
+  --ld-window-r2 0\
+  --ld-window 99999\
+  --out nlr.both 
+  
+race="eur"  # or race="lat"
+plink --bfile /ccls/home/sli/GWAS/bcell/ccls.$race\
+  --allow-no-sex\
+  --ld-window-kb 500\
+  --ld-snps chr1:199150288:G:T\
+  --r2 dprime \
+  --ld-window-r2 0\
+  --ld-window 99999\
+  --out nlr.$race
+
+  
+```  
+
+```{python}  
+## python3 script
+f=open('nlr.both.ld')
+f.readline()
+o=open('nlr.both.ld_lz','w')
+o.write('snp1 snp2 dprime rsquare\n')
+for lines in f:
+ lines=lines.split()
+ o.write(lines[2].split(':')[0]+':'+lines[2].split(':')[1]+' '+lines[5].split(':')[0]+':'+lines[5].split(':')[1]+' '+lines[7]+' '+lines[6]+'\n')
+
+o.close()
+
+f=open('nlr.eur.ld')
+f.readline()
+o=open('nlr.eur.ld_lz','w')
+o.write('snp1 snp2 dprime rsquare\n')
+for lines in f:
+ lines=lines.split()
+ o.write(lines[2].split(':')[0]+':'+lines[2].split(':')[1]+' '+lines[5].split(':')[0]+':'+lines[5].split(':')[1]+' '+lines[7]+' '+lines[6]+'\n')
+
+o.close()
+
+
+f=open('nlr.lat.ld')
+f.readline()
+o=open('nlr.lat.ld_lz','w')
+o.write('snp1 snp2 dprime rsquare\n')
+for lines in f:
+ lines=lines.split()
+ o.write(lines[2].split(':')[0]+':'+lines[2].split(':')[1]+' '+lines[5].split(':')[0]+':'+lines[5].split(':')[1]+' '+lines[7]+' '+lines[6]+'\n')
+
+o.close()
+
+```
+
+```{r}
+
+setwd("/ccls/home/sli/GWAS/NLR")
+library(tidyverse)
+library(data.table)
+
+meta = fread("meta.chr1.NLR.logistic") %>%
+  separate(MarkerName,c("chr","pos","ref","alt"))%>%
+  mutate(MarkerName = paste0(chr,":",pos)) %>%
+  select(MarkerName,`P-value`)
+
+write.table(meta,"chr1.NLR.logistic_lz", sep='\t', row.names = FALSE, quote=FALSE)
+
+meta = fread("meta.eur.chr1.NLR.logistic") %>%
+  separate(MarkerName,c("chr","pos","ref","alt"))%>%
+  mutate(MarkerName = paste0(chr,":",pos)) %>%
+  select(MarkerName,`P-value`)
+
+write.table(meta,"chr1.eur.NLR.logistic_lz", sep='\t', row.names = FALSE, quote=FALSE)
+
+meta = fread("meta.lat.chr1.NLR.logistic") %>%
+  separate(MarkerName,c("chr","pos","ref","alt"))%>%
+  mutate(MarkerName = paste0(chr,":",pos)) %>%
+  select(MarkerName,`P-value`)
+
+write.table(meta,"chr1.lat.NLR.logistic_lz", sep='\t', row.names = FALSE, quote=FALSE)
+
+```
+
+```{bash}
+
+locuszoom --build hg38\
+  --refsnp chr1:199150288\
+  --flank 500kb\
+  --ld nlr.both.ld_lz\
+  --metal chr1.NLR.logistic_lz\
+  --prefix chr1.both\
+  --plotonly
+
+
+for race in "eur" "lat"; do
+  locuszoom --build hg38\
+    --refsnp chr1:199150288\
+    --flank 500kb\
+    --ld nlr.$race.ld_lz\
+    --metal chr1.$race.NLR.logistic_lz\
+    --prefix chr1.$race\
+    --plotonly
+done
+
+```
+
+```{r loop up key SNPs}
+
+setwd("/ccls/home/sli/GWAS/NLR")
+library(tidyverse)
+library(data.table)
+
+var="NLR"
+
+raw = fread(paste0("meta.ccls.",var,".TBL"))%>%
+  dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+  separate(MarkerName, c("CHROM","POS","REF","ALT")) 
+
+raw1 = raw %>%
+  mutate(loc = paste0(CHROM,":",POS))
+
+lookup = fread("/ccls/home/sli/GWAS/bcell/rawfiles/lookup.meta.snps", header=FALSE) %>%
+  inner_join(raw1, by=c("V1"="loc"))
+
+lookup = lookup %>%
+  arrange(P)
+
+#write.csv(lookup, paste0(var,".meta.lookup.csv"))
+#lookup = read.csv(paste0(var,".meta.lookup.csv"),row.names = 1)
+
+dic = fread("/ccls/home/sli/GWAS/bcell/rawfiles/meta.lookup.cellP.txt") 
+colnames(dic) = c("trait","matID","chr","pos","gene")
+dic1 = dic %>% 
+  dplyr::select(matID,gene,trait)
+
+metalu = lookup%>%
+  select(ID,CHROM,POS,REF,ALT,Effect,P,Direction) %>%
+  mutate(matID = paste0(CHROM,":",POS)) %>%
+  inner_join(dic1, by="matID") %>%
+  arrange(P)
+  
+write.csv(metalu, paste0(var,".meta.lookup.gene.csv"))
+
+metalu = read.csv(paste0(var,".meta.lookup.gene.csv"))
+mean(metalu$P<0.05)
+# 0.05325952
+```
+

@@ -1,0 +1,695 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: Finding somatic variants from childhood leukemia tumor samples, with matched normal tissues available.
+
+```{bash GATK pipeline on wgs sequencing data}
+
+# raw files are saved at 
+
+cd /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq
+
+# 38 germline and 35 tumors
+
+ls | sed -E 's/TM_|GM_//g' | uniq
+
+```
+
+```{bash fastqc}
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-98
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/fastqc_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/fastqc_%A_%a.errcd
+#SBATCH --job-name=fastqc
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/fastqc.sh
+module load gcc/11.3.0 fastqc/0.11.9
+
+#fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+fastq2=(`echo $fastq1 | sed 's/_1.fq.gz/_2.fq.gz/g'`)
+
+fastqc --noextract $fastq1 $fastq2 \
+  --outdir /scratch1/lishaobo/smoking_temp/fastqc\
+  -t 20
+  
+```
+
+paired-fastq-to-unmapped-bam
+
+```{bash fastq2ubam}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-37
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/fastq2ubam_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/fastq2ubam_%A_%a.errcd
+#SBATCH --job-name=fastq2ubam
+#SBATCH -c 15
+#SBATCH --ntasks=1
+#SBATCH --mem=60G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/fastq2ubam.sh
+
+#fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+fastq2=(`echo $fastq1 | sed 's/_1.fq.gz/_2.fq.gz/g'`)
+
+base=$(basename ${fastq1} _1.fq.gz)
+sample_name=(`echo $base | cut -d '_' -f1-2`)
+library_name=(`echo $base | cut -d '_' -f3`)
+flowcell=(`echo $base | cut -d '_' -f4`)
+lane=${base: -1}
+readgroup_name="$sample_name.$flowcell"."$lane"
+platform_unit="$flowcell"."$lane"
+platform_name=ILLUMINA
+
+output_unmapped_bam="$base.unmapped.unsorted.bam"
+out_dir="/scratch2/lishaobo/smoking_temp/unmapped.bam"
+
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk FastqToSam \
+    --java-options "-Xmx85G"\
+    --FASTQ $fastq1 \
+    --FASTQ2 $fastq2 \
+    --OUTPUT $out_dir/$output_unmapped_bam\
+    --READ_GROUP_NAME $readgroup_name \
+    --SAMPLE_NAME $sample_name \
+    --LIBRARY_NAME $library_name \
+    --PLATFORM_UNIT $platform_unit \
+    --PLATFORM $platform_name\
+    --TMP_DIR /scratch2/lishaobo/temp
+    
+```
+
+```{bash sort unmapped bam}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-98
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/sortubam_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/sortubam_%A_%a.errcd
+#SBATCH --job-name=sortubam
+#SBATCH -c 15
+#SBATCH --ntasks=1
+#SBATCH --mem=89G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+# remember to generate fille list before sending out script!
+#!/bin/bash
+#SBATCH --time=1:00:00
+#SBATCH --job-name=middle
+#SBATCH --mem=8G
+#sbatch --dependency=afterok:10862838 /scratch1/lishaobo/smoking_temp/codes/middle1.sh
+#cd /scratch1/lishaobo/smoking_temp
+#ls /scratch2/lishaobo/smoking_temp/unmapped.bam/*.unmapped.unsorted.bam | wc -l
+#ls /scratch2/lishaobo/smoking_temp/unmapped.bam/*.unmapped.unsorted.bam > /scratch1/lishaobo/smoking_temp/all.unmapped.unsorted.files.txt
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch --dependency=afterok:10864019 /scratch1/lishaobo/smoking_temp/codes/sortubam.sh
+
+input_bam=(`cat /scratch1/lishaobo/smoking_temp/all.unmapped.unsorted.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${input_bam} .unmapped.unsorted.bam)
+
+sorted_bam_name="$base.unmapped.sorted.bam"
+out_dir="/scratch2/lishaobo/smoking_temp/unmapped.bam"
+
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SortSam \
+    --java-options "-Xmx55G"\
+    --INPUT $input_bam \
+    --OUTPUT $out_dir/$sorted_bam_name\
+    --SORT_ORDER queryname \
+    --TMP_DIR /scratch2/lishaobo/temp
+
+# to save space!
+rm -rf $input_bam   
+
+```
+
+bwa alignment (mapping)
+
+```{bash bwa germline samples}
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=8,18-47
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/bwa_gm_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/bwa_gm_%A_%a.errcd
+#SBATCH --job-name=bwa_gm
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=89G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/bwa_gm.sh
+
+module load gcc/11.3.0 bwa/0.7.17
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+
+#fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/GM*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/GM*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+fastq2=(`echo $fastq1 | sed 's/_1.fq.gz/_2.fq.gz/g'`)
+
+base=$(basename ${fastq1} _1.fq.gz)
+sample_name=(`echo $base | cut -d '_' -f1-2`)
+output_aligned_bam="$base.aligned.unsorted.bam"
+out_dir="/scratch1/lishaobo/smoking_temp/aligned.bam"
+
+bwa mem $ref \
+  -t 20 \
+  $fastq1 $fastq2 \
+  | samtools view -S -b \
+   > $out_dir/$output_aligned_bam
+
+```
+
+```{bash bwa tumor samples}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-51
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/bwa_tm_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/bwa_tm_%A_%a.errcd
+#SBATCH --job-name=bwa_tm
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=89G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/bwa_tm.sh
+
+module load gcc/11.3.0 bwa/0.7.17
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+
+fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/TM*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+#fastq1=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/*/TM*_1.fq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+fastq2=(`echo $fastq1 | sed 's/_1.fq.gz/_2.fq.gz/g'`)
+
+base=$(basename ${fastq1} _1.fq.gz)
+sample_name=(`echo $base | cut -d '_' -f1-2`)
+output_aligned_bam="$base.aligned.unsorted.bam"
+out_dir="/scratch1/lishaobo/smoking_temp/aligned.bam"
+
+bwa mem $ref \
+  -t 20 \
+  $fastq1 $fastq2 \
+  | samtools view -S -b \
+   > $out_dir/$output_aligned_bam
+
+```
+
+```{bash sort aligned bam}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-98
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/sortabam_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/sortabam_%A_%a.errcd
+#SBATCH --job-name=sortabam
+#SBATCH -c 15
+#SBATCH --ntasks=1
+#SBATCH --mem=89G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+# remember to generate fille list before sending out script!
+#ls /scratch1/lishaobo/smoking_temp/aligned.bam/*.aligned.unsorted.bam | wc -l
+#ls /scratch1/lishaobo/smoking_temp/aligned.bam/*.aligned.unsorted.bam > /scratch1/lishaobo/smoking_temp/all.aligned.unsorted.files.txt
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/sortabam.sh
+
+input_bam=(`ls /scratch1/lishaobo/smoking_temp/aligned.bam/*.aligned.unsorted.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${input_bam} .aligned.bam)
+
+out_dir="/scratch1/lishaobo/smoking_temp/aligned.bam"
+sorted_bam_name="$base.aligned.sorted.bam"
+
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SortSam \
+    --java-options "-Xmx85G"\
+    --INPUT $input_bam \
+    --OUTPUT $out_dir/$sorted_bam_name\
+    --SORT_ORDER queryname \
+    --TMP_DIR /scratch2/lishaobo/temp
+
+# to save space!
+rm -rf $input_bam
+
+
+# GM_552232_CSFP210004989-1a_HJMVJDSX2_L1.aligned.sorted.bam is too small, find out why
+# -rw-rw---- 1 lishaobo lishaobo 971M Sep  7 12:44 GM_552232_CSFP210004989-1a_HJMVJDSX2_L1.aligned.sorted.bam
+
+#!/bin/bash
+#SBATCH --time=24:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/debug.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/debug.errcd
+#SBATCH --job-name=debug
+#SBATCH --ntasks=1
+#SBATCH --mem=16G
+#SBATCH --partition=main
+set -e
+set -x
+set -u
+set -o pipefail
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/debug.sh
+module load gcc/11.3.0 bwa/0.7.17
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta
+fastq1=/project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq/GM_552232/GM_552232_CSFP210004989-1a_HJMVJDSX2_L1_1.fq.gz
+fastq2=(`echo $fastq1 | sed 's/_1.fq.gz/_2.fq.gz/g'`)
+base=$(basename ${fastq1} _1.fq.gz)
+sample_name=(`echo $base | cut -d '_' -f1-2`)
+output_aligned_bam="$base.aligned.unsorted.debug.bam"
+out_dir="/scratch1/lishaobo/smoking_temp/aligned.bam"
+bwa mem $ref \
+  -t 20 \
+  $fastq1 $fastq2 \
+  | samtools view -S -b \
+   > $out_dir/$output_aligned_bam
+input_bam=/scratch1/lishaobo/smoking_temp/aligned.bam/GM_552232_CSFP210004989-1a_HJMVJDSX2_L1.aligned.unsorted.debug.bam
+base=$(basename ${input_bam} .aligned.bam)
+sorted_bam_name="$base.aligned.sorted.debug.bam"
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SortSam \
+    --java-options "-Xmx85G"\
+    --INPUT $input_bam \
+    --OUTPUT $out_dir/$sorted_bam_name\
+    --SORT_ORDER queryname \
+    --TMP_DIR /scratch2/lishaobo/temp
+#everything looks OK!    
+rm -rf $input_bam
+rm -rf $out_dir/$sorted_bam_name
+```
+
+MergeBam
+
+```{bash}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-98
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/mergebam_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/mergebam_%A_%a.errcd
+#SBATCH --job-name=mergebam
+#SBATCH -c 15
+#SBATCH --ntasks=1
+#SBATCH --mem=89G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+# remember to generate file list before sending out script!
+#!/bin/bash
+#SBATCH --time=1:00:00
+#SBATCH --job-name=middle
+#SBATCH --mem=8G
+#sbatch --dependency=afterok:10862838 /scratch1/lishaobo/smoking_temp/codes/middle1.sh
+#cd /scratch1/lishaobo/smoking_temp
+#ls /scratch2/lishaobo/smoking_temp/unmapped.bam/*.unmapped.sorted.bam | wc -l
+#ls /scratch2/lishaobo/smoking_temp/unmapped.bam/*.unmapped.sorted.bam > /scratch1/lishaobo/smoking_temp/all.unmapped.sorted.files.txt
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/mergebam.sh
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+
+unmapped_bam=(`cat /scratch1/lishaobo/smoking_temp/all.unmapped.sorted.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${unmapped_bam} .unmapped.sorted.bam)
+
+aligned_bam_name="$base.aligned.sorted.bam"
+aligned_bam="/scratch1/lishaobo/smoking_temp/aligned.bam/${aligned_bam_name}"
+output_bam="/scratch2/lishaobo/smoking_temp/mergebam/${base}.bam"
+
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk MergeBamAlignment \
+  --java-options "-Xmx85G"\
+  --VALIDATION_STRINGENCY SILENT \
+  --EXPECTED_ORIENTATIONS FR \
+  --ATTRIBUTES_TO_RETAIN X0 \
+  --ALIGNED_BAM $aligned_bam \
+  --UNMAPPED_BAM $unmapped_bam\
+  --OUTPUT $output_bam \
+  --REFERENCE_SEQUENCE $ref \
+  --PAIRED_RUN true \
+  --SORT_ORDER "unsorted" \
+  --IS_BISULFITE_SEQUENCE false \
+  --ALIGNED_READS_ONLY false \
+  --CLIP_ADAPTERS false \
+  --MAX_RECORDS_IN_RAM 2000000 \
+  --ADD_MATE_CIGAR true \
+  --MAX_INSERTIONS_OR_DELETIONS -1 \
+  --PRIMARY_ALIGNMENT_STRATEGY MostDistant \
+  --PROGRAM_RECORD_ID "bwamem" \
+  --PROGRAM_GROUP_VERSION "0.7.12-r1039" \
+  --PROGRAM_GROUP_COMMAND_LINE "bwa mem $ref -t 20" \
+  --PROGRAM_GROUP_NAME "bwamem" \
+  --UNMAPPED_READ_STRATEGY COPY_TO_TAG \
+  --ALIGNER_PROPER_PAIR_FLAGS true \
+  --UNMAP_CONTAMINANT_READS true \
+  --TMP_DIR /scratch2/lishaobo/temp
+  
+# to save space!
+rm -rf $aligned_bam 
+rm -rf $unmapped_bam
+  
+```
+
+```{bash validate merged bam}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-98
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/validatembam_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/validatembam_%A_%a.errcd
+#SBATCH --job-name=validatembam
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=50G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/validatembam.sh
+
+input_bam=(`ls /scratch2/lishaobo/smoking_temp/mergebam/*.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+singularity exec \
+  --bind /project,/scratch2,/scratch1 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk ValidateSamFile \
+  --java-options "-Xmx250G"\
+  --INPUT $input_bam \
+  --MODE SUMMARY \
+  --TMP_DIR /scratch2/lishaobo/temp
+  
+```
+
+Mark Duplicates
+
+```{bash MarkDuplicates}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=1-73
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/MarkDuplicates_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/MarkDuplicates_%A_%a.errcd
+#SBATCH --job-name=MarkDuplicates
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=120G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch --dependency=afterok:10948124 /scratch1/lishaobo/smoking_temp/codes/MarkDuplicates.sh
+
+sample_name=(`ls /project/desmith_128/sebastian/smoking_all_wgs_raw/raw_data_fastq |sed -n ${SLURM_ARRAY_TASK_ID}p`)
+
+input_bam=`ls /scratch2/lishaobo/smoking_temp/mergebam/${sample_name}*.bam`
+input_bam_prefix=`printf " --INPUT %s" $input_bam`
+prefix=" --INPUT "
+input_bam_list=${input_bam_prefix#"$prefix"}
+
+output_bam="$sample_name.aligned.duplicates_marked.bam"
+metrics_filename="$sample_name.duplicate_metrics"
+out_dir="/scratch1/lishaobo/smoking_temp/MarkDuplicates"
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk MarkDuplicates \
+  --java-options "-Xmx100G"\
+  --INPUT $input_bam_list \
+  --OUTPUT $out_dir/$output_bam\
+  --METRICS_FILE $out_dir/$metrics_filename \
+  --VALIDATION_STRINGENCY SILENT \
+  --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \
+  --ASSUME_SORT_ORDER "queryname" \
+  --CREATE_MD5_FILE true \
+  --TMP_DIR /scratch2/lishaobo/temp
+
+```
+
+SortAndFixTags
+
+```{bash}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=???
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/SortAndFixTags_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/SortAndFixTags_%A_%a.errcd
+#SBATCH --job-name=SortAndFixTags
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+# remember to generate fille list before sending out script!
+ls /scratch1/lishaobo/smoking_temp/mergebam/*.bam | wc -l
+ls /scratch1/lishaobo/smoking_temp/mergebam/*.bam  > /scratch1/lishaobo/smoking_temp/all.merged.files.txt
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+mergedbam=(`ls /scratch1/lishaobo/smoking_temp/all.merged.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${mergedbam} .bam)
+output_dir="/scratch1/lishaobo/smoking_temp/mergebam"
+output_bam="${output_dir}/${output_bam_basename}.sorted.fixed.bam"
+
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SortSam  \
+  --java-options "-XmxXXXG"\
+  --INPUT $mergedbam \
+  --OUTPUT /dev/stdout \
+  --SORT_ORDER "coordinate" \
+  --CREATE_INDEX false \
+  --CREATE_MD5_FILE false \
+    | \
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk SetNmMdAndUqTags \
+  --INPUT /dev/stdin \
+  --OUTPUT $output_bam\
+  --CREATE_INDEX true \
+  --CREATE_MD5_FILE true \
+  --REFERENCE_SEQUENCE $ref
+
+rm -rf $mergedbam
+
+```
+
+BaseRecalibrator
+
+```{bash}
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=???
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/BaseRecalibrator_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/BaseRecalibrator_%A_%a.errcd
+#SBATCH --job-name=BaseRecalibrator
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+
+cd /scratch1/lishaobo/smoking_temp/mergebam
+
+# remember to generate fille list before sending out script!
+ls /scratch1/lishaobo/smoking_temp/mergebam/*.sorted.fixed.bam | wc -l
+ls /scratch1/lishaobo/smoking_temp/mergebam/*.sorted.fixed.bam  > /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+known_sites_snp=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf
+known_sites_indel=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.known_indels.vcf.gz
+interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
+
+input_bam=(`ls /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${input_bam} .sorted.fixed.bam)
+output_dir="/scratch1/lishaobo/smoking_temp/recalibration_report"
+recalibration_report="$output_bam_basename.recal_data.csv"
+recalibration_report_output=$output_dir/$recalibration_report
+
+output_dir_bam="/scratch1/lishaobo/smoking_temp/mergebam"
+output_bam_name="$output_bam_basename.recalibrated.bam"
+output_bam=$output_dir_bam/$output_bam_name
+
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk BaseRecalibrator  \
+  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  -R $ref \
+  -I $input_bam \
+  --use-original-qualities \
+  -O $recalibration_report_output\
+  --known-sites $known_sites_snp \
+  --known-sites $known_sites_indel \
+  -L $interval_list 
+
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk ApplyBQSR  \
+  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  -R $ref \
+  -I $input_bam \
+  -O $output_bam \
+  -L $interval_list \
+  -bqsr $recalibration_report_output\
+  --static-quantized-quals 10 \
+  --static-quantized-quals 20 \
+  --static-quantized-quals 30 \
+  --add-output-sam-program-record \
+  --create-output-bam-md5 \
+  --use-original-qualities
+    
+```
+
+```{bash}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --array=???
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/AnalyzeCovariates_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/AnalyzeCovariates_%A_%a.errcd
+#SBATCH --job-name=AnalyzeCovariates
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --partition=main
+
+cd /scratch1/lishaobo/smoking_temp/mergebam
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+known_sites_snp=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf
+known_sites_indel=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.known_indels.vcf.gz
+interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
+
+input_bam=(`ls /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${input_bam} .sorted.fixed.bam)
+output_dir="/scratch1/lishaobo/smoking_temp/recalibration_report"
+recalibration_report_pre_name="$output_bam_basename.recal_data.csv"
+recalibration_report_pre=$output_dir/$recalibration_report_pre_name
+
+recalibration_report_post_name="$output_bam_basename.recal_data.post.csv"
+recalibration_report_post=$output_dir/$recalibration_report_post_name
+
+output_dir_bam="/scratch1/lishaobo/smoking_temp/mergebam"
+output_bam_name="$output_bam_basename.recalibrated.bam"
+output_bam=$output_dir_bam/$output_bam_name
+
+outcsv="${output_dir}/${base}.AnalyzeCovariates.csv"
+outpdf="${output_dir}/${base}.AnalyzeCovariates.pdf"
+
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk BaseRecalibrator  \
+  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  -R $ref \
+  -I $output_bam \
+  -O $recalibration_report_post \
+  --known-sites $known_sites_snp \
+  --known-sites $known_sites_indel \
+  -L $interval_list 
+  
+singularity exec \
+  --bind /project,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  gatk AnalyzeCovariates  \
+  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  --before $recalibration_report_pre \
+  --after $recalibration_report_post \
+  --csv $outcsv\
+  --plots $outpdf
+
+```
+
+

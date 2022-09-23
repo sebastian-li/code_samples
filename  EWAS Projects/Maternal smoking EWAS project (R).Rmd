@@ -1,0 +1,1496 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: USC part of a multi-cohort EWAS meta-analysis between maternal smoking and DNA methylation, led by the NIH
+
+
+
+To find mothers who smoked THROUGHOUT the pregnancy period (sustained=1):	
+		
+For Phase 5, we asked specifically about the quit date during pregnancy	(makes things easier)	
+		
+m_sm_preg_di	=1	Reported some smoking during pregnancy AND
+m_sm_stop_preg =0	Reported continuous smoking throughout pregnancy AND
+m_cignumpreg	>=1 	At least 3 cigs per day during pregnancy or equivalent of 1+ pack per week 
+
+_____________________________________________________________________________________
+		
+For Phases 1-3, we don't know if the mothers stopped smoking during pregnancy period, so we have to estimate based on behavior before and after pregnancy (makes things more complicated)		
+		
+m_sm_preg_di	=1	Reported some smoking during pregnancy AND
+m_cignumpreg >=1	At least 3 cigs per day during pregnancy or equivalent of 1+ pack per week AND 
+m_sm_pre_di	=1	Reported smoking 3 months before pregnancy AND
+m_sm_post_di	=1	Reported smoking after birth  OR
+(m_sm_bf_di =1	Reported smoking while breastfeeding OR
+m_sm_bf_di =.	Did not answer question about smoking while breastfeeding, presumably because they were not breastfeeding)
+
+_____________________________________________________________________________________		
+To find mothers who did not smoke the pregnancy period (sustained=0):	
+		
+For Phase 5, we asked specifically about the quit date during pregnancy	(makes things easier)	
+		
+m_sm_preg_di	= 0	Reported some smoking during pregnancy AND
+m_sm_stop_preg = 0	Reported continuous smoking throughout pregnancy AND
+
+_____________________________________________________________________________________
+		
+For Phases 1-3, we don't know if the mothers stopped smoking during pregnancy period, so we have to estimate based on behavior before and after pregnancy (makes things more complicated)		
+		
+m_sm_preg_di	= 0	Reported some smoking during pregnancy AND
+m_sm_pre_di	= 0	Reported smoking 3 months before pregnancy OR
+M_EVER_SM_DI = 0	Mother ever smoked yes/no
+
+_____________________________________________________________________________________		
+To find mothers quit smoking before pregnancy (former smokers), restricting to those who did not smoke during pregnancy:	
+former = 1		
+m_sm_pre_di	= 0	Reported smoking 3 months before pregnancy AND
+M_EVER_SM_DI = 1	Mother ever smoked yes/no
+
+former = 0		
+m_sm_pre_di	= 0	Reported smoking 3 months before pregnancy AND
+M_EVER_SM_DI = 0	Mother ever smoked yes/no
+
+_____________________________________________________________________________________		
+Father’s smoking status:	
+
+patsmk3 = 0
+F_EVER_SM_DI = 0	Father ever smoked yes/no
+
+patsmk3 = former	
+F_EVER_SM_DI = 1	Father ever smoked yes/no AND
+F_SM_PRE_DI = 0	Father smoked 3 months  before pregnancy (Yes/no)
+
+patsmk3 = current/smoking around conception
+F_EVER_SM_DI = 1	Father ever smoked yes/no AND
+F_SM_PRE_DI = 1	Father smoked 3 months before pregnancy (Yes/no) OR
+F_SM_NOW_DI = 1	Father Currently smoking (if this is during pregnancy, please check)
+
+_____________________________________________________________________________________
+
+Maternal Exposure to SHS:	
+
+shs = 0
+m_othsm_home_pre = 0	Other smoker near Mother at home before and during pregnancy AND
+m_othsm_work_pre = 0	Other smoker near Mother at work before and during pregnancy AND
+m_othsm_car_pre = 0	Other smoker near mother in car before and during pregnancy AND
+pat.smk = 0 OR former	
+	
+	
+	
+shs=1	
+m_othsm_home_pre = 1	Other smoker near Mother at home before and during pregnancy OR
+m_othsm_work_pre = 1	Other smoker near Mother at work before and during pregnancy OR
+m_othsm_car_pre = 1	Other smoker near mother in car before and during pregnancy OR
+F_SM_NOW_DI = 1	Father Currently smoking (if this is during pregnancy, please check) 
+
+
+
+
+M_EVER_SM_DI	Mother ever smoked yes/no
+M_SM_NOW_DI	Mother currently smoking yes/no
+M_QUIT_DATE	Mother quitting date
+M_SM_PRE_DI	Mother smoked 3 months before pregnancy
+M_CIGNUMPRE	Mother smoked 3 months  before pregnancy (number of cig)
+M_SM_PREG_DI	Mother smoked during pregnancy (Yes/no)
+M_CIGNUMPREG	Mother smoked during pregnancy (number of cig)
+F_EVER_SM_DI	Father ever smoked yes/no
+F_SM_AGE	Age Father started smoking
+F_SM_NOW_DI	Father Currently smoking
+F_QUIT_DATE	Father quitting date
+F_SM_PRE_DI	Father smoked 3 months  before pregnancy (Yes/no)
+F_CIGNUMPRE	Father smoked 3 months  before pregnancy (number of cig)
+f_othsm_home_pre	Other smoker near father at home before pregnancy 
+f_othsm_work_pre	Other smoker near father at work before pregnancy
+f_othsm_car_pre	Other smoker near father in car before pregnancy
+f_othsm_pubsoc_pre	Other smoker near father in public before pregnancy
+
+
+
+> Remove extreme outliers using the 3IQR method
+
+Variables:
+Maternal age at delivery (continuous variable)
+Maternal SES (use maternal education, if possible)
+Parity: 0, 1+
+gestational age: weeks, continuous 
+Maternal pre-pregnancy BMI: continuous 
+Cell type proportion: using IDOL and include all 7 cell types 
+Child sex: Male as “1” and female as “0”
+Technical covariates (e.g., batch, plate) 
+Ancestry: conduct analyses by major race/ethnic groups (European, Hispanic)
+Selection factor: CaCo
+Birthweight: grams 
+remove those with missing birthweight in all models
+(do a scatterplot of birthweight and gestational age to delete implausible birthweight/gestational age combinations)
+
+Sustained Maternal Smoking: restrict to women who never smoked during pregnancy and Sustained groups
+Never: Never smoked during pregnancy
+Quit: Quit smoking early in pregnancy
+Sustained: Smoked most of pregnancy 
+
+> robust linear regression 
+outcome is methylation and the exposure is smoking
+
+3mo preg 3 month
+preg preg
+
+Never: Never smoked during pregnancy (preg=0,3mo=0)
+Quit: Quit smoking early in pregnancy (preg=0,3mo=1)
+Sustained: Smoked most of pregnancy (preg=1)
+
+1.	Sustained Maternal Smoking (# models: 1)
+
+DNA methylation ~ sustained maternal smoking (Sustained vs Never During Pregnancy) + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+DNA methylation ~ sustained maternal smoking (Sustained vs Never During Pregnancy) + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates) + birthweight
+
+2.	 Sex-stratified analysis for sustained maternal smoking (# models: 3)
+
+Males
+DNA methylation ~ sustained maternal smoking (Sustained vs Never During Pregnancy) + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+Females
+DNA methylation ~ sustained maternal smoking (Sustained vs Never During Pregnancy) + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+Interaction
+DNA methylation ~ sustained maternal smoking (Sustained vs Never During Pregnancy) + sustained maternal smoking*sex + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+3.	Dose-response for sustained maternal smoking (# models: 2)
+Dosage is a categorical variable
+0 Referent1: Never smoked during pregnancy
+1 Dose1: 1-4 cigs per day
+2 Dose2: 5+ cigs per day
+
+DNA methylation ~ Dosage + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+RESTRICTING TO SUSTAINED SMOKERS (dose=1,2)
+DNA methylation ~ Dose2 vs Dose1 + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+4. Mother is former smoker 
+Never: Never smoked
+Former: Quit smoking before pregnancy
+
+DNA methylation ~ Former Smoker vs Never + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+5.	Secondhand smoke during pregnancy (# models: 2)
+
+MODEL RESTRICTING TO WOMEN WHO DID NOT SMOKE DURING PREGNANCY
+DNA methylation ~ secondhand smoke during pregnancy + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+MODEL INCLUDING ALL WOMEN AND ADJUSTING FOR MATERNAL SMOKING STATUS (DID NOT SMOKE/QUIT/SUSTAINED)
+DNA methylation ~ secondhand smoke during pregnancy + maternal smoking status
+ + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+6. Paternal smoking (# models: 2-3 depending on your data) (collected around early pregnancy (around the first trimester))
+Referent: Father has never smoked
+Paternal1: Father is a former smoker (stopped before pregnancy)
+Paternal2: Father smoked during (early) pregnancy
+
+MODEL RESTRICTING TO WOMEN WHO DID NOT SMOKE DURING PREGNANCY
+A dummy variable will need to be created for Paternal1 and Paternal2
+DNA methylation ~ Paternal1 + Paternal2 + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+MODEL RESTRICTING TO WOMEN WHO DID NOT SMOKE DURING PREGNANCY
+DNA methylation ~ paternal smoking (Paternal3 vs Referent2) + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+MODEL INCLUDING ALL WOMEN AND ADJUSTING FOR MATERNAL SMOKING STATUS (DID NOT SMOKE/QUIT/SUSTAINED)
+DNA methylation ~ paternal smoking (Paternal3 vs Referent2) + maternal smoking status + maternal age + maternal education (or a surrogate socioeconomic metric) + parity + gestational age at birth + maternal BMI + infant sex + 7 cell type proportions (+ selection factor) (+ technical covariates)
+
+
+# Objective: Example Code to Run Prenatal Smoking EWAS for PACE meta-analysis
+Programmer: TTH
+
+ matsmk: code 0 for did not smoke in pregnancy, 1 for quit during pregnancy, and 2 for sustained smoking
+ former: code 0 for woman never smoked, 1 for women quit smoking before pregnancy
+ mat_age: maternal age at delivery (years), continuous
+ mat_edu: code 1, 2, 3, 4 from lowest education level to highest education level
+ parity: code 0 for nulliparous, 1 for 1+
+ gestage: gestational age in weeks, continuous
+ mat_bmi: maternal pre-pregnancy BMI, continuous
+ sex: infant sex, code 0 for females, 1 for males
+ birthweight: grams, continuous
+
+ Bcell: estimated cell types for B cells
+ CD4T: estimated cell types for CD4T
+ CD8T: estimated cell types for CD8T
+ Gran: estimated cell types for granulocytes
+ Mono: estimated cell types for Monocytes
+ NK: estimated cell types for NK
+ nRBC: estimated cell types for nucleated RBC
+
+ dosage: code 0 for did not smoke during pregnancy, 1 for 1-5 cigs/day among sustainers, 2 for 5+ cigs/day among sustainers
+ SHS: code 0 for not exposed, 1 for exposed
+ patsmk: code 0 for did not smoke during pregnancy, 1 for smoked in early pregnancy
+ patsmk3: code 0 for never smoked in lifetime, 1 for used to smoke but quit before pregnancy, 2 for smoked in early pregnancy
+
+```{r}
+setwd("~/")
+set=4
+a = fread("covariates_for_PACE_2021jan.csv") %>%
+  mutate(smp_type="bg") %>%
+  dplyr::rename("subjectId"="SubjectID")%>%
+  as.data.frame()
+
+pheno.0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  left_join(a,by=c("subjectId","smp_type"))
+
+#write.csv(pheno.0,paste0("~/sets/set",set,"/clinical_variables.csv"))
+
+
+pheno.0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  select(-X)%>%
+  rename("mo_age"="mo_age_birth",
+         "motherWt"="mo_weight",
+         "motherHt"="mo_height")%>%
+  mutate(birthWt=ch_birthwt_bc_full)
+  
+
+#write.csv(pheno.0,paste0("~/sets/set",set,"/clinical_variables.csv"))
+
+
+```
+
+
+```{r data preparation}
+
+library(tidyverse)
+library(data.table)
+
+setwd("~/ewas/paceSmoking")
+
+changeMssing = function(aDF){
+  for(i in 1:length(aDF)){
+    if(!aDF[i]%in%c("1","0"))aDF[i]=NA
+  }
+  return(as.numeric(aDF))
+}
+
+shsJ = fread("shs_joe.csv") %>%
+  as.data.frame()%>%
+  dplyr::select(SubjectID,m_othsm_home_pre, m_othsm_work_pre,m_othsm_car_pre,
+         m_sm_preg_di,m_cignumpreg,m_sm_pre_di,m_sm_post_di,m_sm_bf_di,m_ever_sm_di,
+         f_ever_sm_di,f_sm_pre_di,f_sm_now_di) 
+vars = setdiff(colnames(shsJ),c("SubjectID","m_cignumpreg"))
+for(i in vars){
+  shsJ[,i] = changeMssing(shsJ[,i])
+}
+
+
+for(set in c(1,2,4)){
+
+  #set=4
+  
+  # prepare methylation data
+  methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds")) 
+  rownames(methy) = c()
+  methy = methy %>% column_to_rownames(var="probeId")
+  
+  ## 3IQR method to get rid of outliers
+  removeOutliers<-function(probes){
+    require(matrixStats)
+    if(nrow(probes) < ncol(probes)) warning("expecting probes are rows (long dataset)")
+    rowIQR <- rowIQRs(probes, na.rm = T)
+    row2575 <- rowQuantiles(probes, probs = c(0.25, 0.75), na.rm = T)
+    maskL <- probes < row2575[,1] - 3 * rowIQR
+    maskU <- probes > row2575[,2] + 3 * rowIQR
+    initial_NAs<-rowSums(is.na(probes))
+    probes[maskL] <- NA
+    removed_lower <- rowSums(is.na(probes))-initial_NAs
+    probes[maskU] <- NA
+    removed_upper <- rowSums(is.na(probes))-removed_lower-initial_NAs
+    N_for_probe<-rowSums(!is.na(probes))
+    Log<-data.frame(initial_NAs,removed_lower,removed_upper,N_for_probe)
+    return(list(probes, Log))
+  }
+  
+  # siqrOtliers = function(x){
+  #    x = as.matrix(x)
+  #    maxIQR = quantile(x)[4] + 3*IQR(x) 
+  #    minIQR =quantile(x)[2] - 3*IQR(x) 
+  #    a=sum(x>maxIQR|x<minIQR)
+  #    return(!a>0)
+  # }
+  
+  #methy = methy[1:1000,]
+  methy.mat = methy%>%as.matrix()
+  methy.mat.trim=removeOutliers(methy.mat)
+  methy.trim = methy.mat.trim[[1]]
+  
+  
+  # prepare phenotype data
+  cellType = read.csv(paste0("~/sets/set",set,"/idol_deconvolution.csv")) %>%
+    dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC)
+
+  pheno.0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+    dplyr::select(subjectId,beadPosition,
+                  Trisomy21.cnm,
+                  gestage,income,CaCo,parity,mo_age,
+       motherWt,motherHt,sex,plate,race,birthWt)%>%
+    left_join(shsJ,by=c("subjectId"="SubjectID")) %>%
+    filter(Trisomy21.cnm==0,!is.na(birthWt))%>%
+    
+  dplyr::mutate(
+         smkNever=ifelse((m_sm_preg_di==0&(m_sm_pre_di==0|m_ever_sm_di==0)),1,0),
+         smkQuit=ifelse((m_sm_preg_di==1&m_sm_post_di==0),1,0),
+         smkSustained = ifelse((m_sm_preg_di==1&m_cignumpreg>1&m_sm_pre_di==1&
+                                  (m_sm_post_di==1|m_sm_bf_di==1|is.na(m_sm_bf_di))),1,0))%>%
+
+   dplyr:: mutate(matsmk=ifelse(smkSustained==1,2,
+                            ifelse(smkQuit==1,1,
+                                ifelse(smkNever==1,0,NA)))) %>%
+           
+     dplyr:: mutate(     
+          
+       former=ifelse(matsmk==0&m_ever_sm_di==1,1,
+                        ifelse(matsmk==0&m_ever_sm_di==0,0,NA)),
+       
+        
+       patsmk3=ifelse(f_ever_sm_di==0,0,
+                     ifelse(f_ever_sm_di==1&f_sm_pre_di==0,1,
+                            ifelse(f_ever_sm_di==1&f_sm_pre_di==1&f_sm_now_di==1,2,NA))),
+       
+       patsmk=ifelse(patsmk3==2,1,
+                     ifelse(patsmk3%in%c(0,1),0,NA)),
+       
+      SHS = ifelse(m_othsm_home_pre==0&m_othsm_work_pre==0&m_othsm_car_pre==0&patsmk==0,0,
+                   ifelse(m_othsm_home_pre==1|m_othsm_work_pre==1|m_othsm_car_pre==1|f_sm_now_di==1,
+                          1,NA)),
+
+      dosage=ifelse(smkSustained==1&m_cignumpreg>=1&m_cignumpreg<=5,1,
+           ifelse(smkSustained==1&m_cignumpreg>5,2,0)),
+
+       mat_age=mo_age,
+       mat_edu=ifelse(income<3,1,
+                      ifelse(income==3,2,
+                             ifelse(income<6,3,4))),
+        parity=ifelse(parity==1,0,1),
+        mat_bmi=motherWt/(motherHt*0.01)^2,
+        sex=ifelse(sex==2,0,sex),
+        birthweight=birthWt,
+        sampleID = beadPosition
+         )%>%
+    
+    inner_join(cellType,by="beadPosition") %>%
+    column_to_rownames(var="beadPosition")
+
+  
+  ########################
+  race="eur"
+  pheno.0.wt = pheno.0 %>%
+    filter(race==1)
+  
+  subs.wt = intersect(colnames(methy.trim),rownames(pheno.0.wt))  
+    
+  methyl.wt=methy.trim[,subs.wt]
+  peho.wt=pheno.0[subs.wt,]
+  
+  write_rds(methyl.wt,paste0("set",set,".",race,".methyl.rds"))
+  write_rds(peho.wt,paste0("set",set,".",race,".pheno.rds"))
+  
+  ########################
+  race="lat"
+  
+  pheno.0.lat = pheno.0 %>%
+    filter(race==3)
+  
+  subs.lat = intersect(colnames(methy.trim),rownames(pheno.0.lat))  
+    
+  methyl.lat=methy.trim[,subs.lat]
+  peho.lat=pheno.0[subs.lat,]
+  
+  write_rds(methyl.lat,paste0("set",set,".",race,".methyl.rds"))
+  write_rds(peho.lat,paste0("set",set,".",race,".pheno.rds"))
+  
+}
+
+```
+
+
+
+```{r run analysis}
+
+library(tidyverse)
+library(data.table)
+
+setwd("~/ewas/paceSmoking")
+  
+for(set in c(1,2)){
+  for(race in c("eur","lat")){
+    
+  #set=4
+  #race="eur"
+
+  ## LOAD PHENOTYPE DATA
+  pheno <- read_rds(paste0("set",set,".",race,".pheno.rds"))
+  
+  ## LOAD METHYLATION DATA
+  methylation <-read_rds(paste0("set",set,".",race,".methyl.rds"))
+  
+  ## COMPLETE PHENOTYPE DATA FOR MATERNAL SMOKING ANALYSES
+  pheno <- pheno[!(is.na(pheno$mat_age) | is.na(pheno$mat_edu) | is.na(pheno$parity) | is.na(pheno$gestage) | is.na(pheno$sex) | is.na(pheno$mat_bmi) | is.na(pheno$birthweight) | is.na(pheno$matsmk)),]
+  dim(pheno)
+  
+  
+  ## create dummy variables for analyses
+  pheno$matedu1v4 <- ifelse(pheno$mat_edu == 1, 1, 0)
+  pheno$matedu2v4 <- ifelse(pheno$mat_edu == 2, 1, 0)
+  pheno$matedu3v4 <- ifelse(pheno$mat_edu == 3, 1, 0)
+  pheno$matsmk2v0 <- ifelse(pheno$matsmk == 2, 1, 0)
+  pheno$matsmk1v0 <- ifelse(pheno$matsmk == 1, 1, 0)
+  pheno$sustained [pheno$matsmk == 2] <- 1
+  pheno$sustained [pheno$matsmk == 0] <- 0
+  
+  print("Maternal Smoking Status")
+  print(table(pheno$matsmk, useNA="always"))
+  
+  ### cross tabs
+  
+  #### FOR STUDIES WHO CAN DIFFERENTIATE BETWEEN PATERNAL NEVER SMOKER AND FORMER SMOKER
+  print("CrossTab Paternal Smoking x Maternal")
+  print(table(pheno$patsmk3, pheno$matsmk, useNA="always"))
+  
+  print("CrossTab Paternal Smoking x Maternal Former Smoking")
+  print(table(pheno$patsmk3, pheno$former, useNA="always"))
+  
+  # print("CrossTab Paternal Smoking x Maternal")
+  # print(table(pheno$patsmk, pheno$matsmk, useNA="always"))
+  
+  print("CrossTab Paternal Smoking x SHS")
+  print(table(pheno$patsmk, pheno$SHS, useNA="always"))
+  
+  print("CrossTab SHS x Maternal Smoking")
+  print(table(pheno$SHS, pheno$matsmk, useNA="always"))
+  
+  print("CrossTab SHS x Maternal Former Smoking")
+  print(table(pheno$SHS, pheno$former, useNA="always"))
+  
+  
+  ### Cell type by maternal sustained smoking status
+  
+  sustained <- pheno[which(pheno$sustained == 1),]
+  nosmk <- pheno[which(pheno$sustained == 0),]
+  
+  
+  sustained.ct <- data.frame(
+  					nRBC = sustained$nRBC,
+  					CD8T = sustained$CD8T, 
+  					CD4T = sustained$CD4T,
+  					NK = sustained$NK,
+  					Bcell = sustained$Bcell,
+  					Mono = sustained$Mono,
+  					Gran = sustained$Gran
+  				)
+  
+  ct.sustained <- data.frame()
+  for (i in 1:ncol(sustained.ct)) {
+  		cell <- colnames(sustained.ct)[i]
+  		mean <- round(mean(sustained.ct[,i]),2)
+  		sd <- round(sd(sustained.ct[,i]),2)
+  		out <- data.frame(cell, mean, sd)
+  		ct.sustained <- rbind(ct.sustained, out)
+  }
+  ct.sustained
+  
+  nosmk.ct <- data.frame(
+  					nRBC = nosmk$nRBC,
+  					CD8T = nosmk$CD8T, 
+  					CD4T = nosmk$CD4T,
+  					NK = nosmk$NK,
+  					Bcell = nosmk$Bcell,
+  					Mono = nosmk$Mono,
+  					Gran = nosmk$Gran
+  				)
+  
+  ct.nosmk <- data.frame()
+  for (i in 1:ncol(nosmk.ct)) {
+  		cell <- colnames(nosmk.ct)[i]
+  		mean <- round(mean(nosmk.ct[,i]),2)
+  		sd <- round(sd(nosmk.ct[,i]),2)
+  		out <- data.frame(cell, mean, sd)
+  		ct.nosmk <- rbind(ct.nosmk, out)
+  }
+  ct.nosmk
+  
+  
+  library(MASS)
+  library(lmtest)
+  library(sandwich)
+  
+  
+  RLM.Robust <- function(meth, cov) {
+                        dat <- data.frame(y = meth, cov)
+  					  ff  <- formula(paste("y ~ ", paste0(colnames(cov), collapse="+")))
+                        mod <- try(rlm(ff, data = dat, maxit = 200))
+                        cf = try(coeftest(mod, vcov=vcovHC(mod, type="HC0")))
+                        N <- sum(!is.na(dat$y))
+  					  n.exp <- sum(!is.na(dat$y) & dat$exp == 1)
+  					  n.unexp <- sum(!is.na(dat$y) & dat$exp == 0)
+  
+  						if (exists(class(cf)) == FALSE) {
+  							out = c(rep(NA,3), N, n.exp, n.unexp)
+  						} 
+  						else if (exists(class(cf)) == TRUE) {
+  							if( class(cf)[1] == "try-error") {
+  							cat("error throw by CpG", set, ";")
+  							out = c(rep(NA,3), N, n.exp, n.unexp)
+  							print(paste0(cov, " - chol2inv could not be computed"))
+  							} 
+  							else {
+  								coef = cf[2,"Estimate"]
+  								se = cf[2,"Std. Error"]
+  								p.value = cf[2,"Pr(>|z|)"]
+  								out = c(coef, se, p.value, N, n.exp, n.unexp) 
+  							}
+                  		
+  					  }
+  					names(out) = c("Beta","SE", "P", "N", "N.exp", "N.unexp"); return(out) 
+  }
+  
+  
+  
+  
+  RLM.Robust.patsmk.3level <- function(meth, cov) {
+                        dat <- data.frame(y = meth, cov)
+  					  ff  <- formula(paste("y ~ ", paste0(colnames(cov), collapse="+")))
+                        mod <- try(rlm(ff, data = dat, maxit = 200))
+                        cf = try(coeftest(mod, vcov=vcovHC(mod, type="HC0")))
+                        N <- sum(!is.na(dat$y))
+  					  N.cur <- sum(!is.na(dat$y) & dat$current == 1)
+  					  N.former <- sum(!is.na(dat$y) & dat$former == 1)
+  					  N.never <- N - (N.cur  + N.former)
+  					  
+  						if (exists(class(cf)) == FALSE) {
+  							out = c(rep(NA,6), N, N.cur, N.former, N.never)
+  						} 
+  						else if (exists(class(cf)) == TRUE) {
+  							if( class(cf)[1] == "try-error") {
+  							cat("error throw by CpG", set, ";")
+  							out = c(rep(NA,6), N, N.cur, N.former, N.never)
+  							print(paste0(cov, " - chol2inv could not be computed"))
+  							} 
+  							else {
+  								cursmk.coef = cf[2,"Estimate"]
+  								cursmk.se = cf[2,"Std. Error"]
+  								cursmk.p.value = cf[2,"Pr(>|z|)"]
+  								
+  								fmrsmk.coef = cf[3,"Estimate"]
+  								fmrsmk.se = cf[3,"Std. Error"]
+  								fmrsmk.p.value = cf[3,"Pr(>|z|)"]
+  								
+  								
+  								out = c(cursmk.coef, cursmk.se, cursmk.p.value, fmrsmk.coef, fmrsmk.se, fmrsmk.p.value,
+  										N, N.cur, N.former, N.never) 
+  							}
+                  		
+  					  }
+  					names(out) = c("cursmk.coef", "cursmk.se", "cursmk.p", "fmrsmk.coef", "fmrsmk.se", "fmrsmk.p",
+  									"N", "N.cur", "N.former", "N.never"); return(out) 
+  }
+  
+  
+  library(parallel) 
+  cl <- makeCluster(40, type="FORK")
+  clusterEvalQ(cl,library(MASS))
+  clusterEvalQ(cl,library(lmtest))
+  
+  ARRAY = "EPIC"
+  DATE = "20210604"         
+  ANALYST = "SL"    
+  
+  STUDYNAME = paste0("CCLS_set",set)
+  GROUP = "SMK"
+  ANCESTRY = race
+  
+  
+  print(STUDYNAME)
+  print(GROUP)
+  print(ANCESTRY)
+  
+  
+  print(ARRAY)
+  print(DATE)
+  print(ANALYST)
+  
+  
+  ############## MATERNAL SUSTAINED ANALYSES
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  
+  pheno2 <- pheno[which(!(is.na(pheno$sustained))),]
+  
+if(sum(pheno2$sustained==1)>=15){
+
+
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID  
+  print("Table of Exposure")
+  print(table(pheno2$sustained), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  ### CHANGE SAMPLEID TO ID IN YOUR STUDY THAT MATCHES THE COLUMN NAME IN THE METHYLATION DATA
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  SUSTAINED <- data.frame(
+  		exp = as.factor(pheno3$sustained),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  SUSTAINED_ADJ_BW <- data.frame(
+  		exp = as.factor(pheno3$sustained),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		bwgt = pheno3$birthweight,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  cov <- SUSTAINED_ADJ_BW
+  cov.desc <- data.frame()
+  
+  for (i in 1:ncol(cov)) {
+  	var <- colnames(cov[i])
+  							
+  	if (is.factor(cov[,i]) == TRUE) {
+  		zero = table(cov[,i])[1][[1]]
+  		one = table(cov[,i])[2][[1]]
+  		mean = NA
+  		sd = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	} else if (is.factor(cov[,i]) == FALSE) { 
+  		mean <- round(mean(cov[,i]),2)
+  		sd <- round(sd(cov[,i]),2)
+  		zero = NA
+  		one = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	}
+  }
+  
+  write.csv(cov.desc, paste0("DESCRIPTIVE_MATERNAL_SUSTAINED_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  model <- c("SUSTAINED", "SUSTAINED_ADJ_BW") 
+  for (i in model) {
+  	EXPOSURE <- i
+  	print(i)
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, get(i))) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+    
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+  
+  
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  }
+  
+  ############## 
+  
+  EXPOSURE = "SUSTAINED_MALES"
+  print(EXPOSURE)
+  
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$sustained))),]
+  
+  ## Restrict to male infants
+  pheno2 <- pheno2[which(pheno2$sex == 1),]
+  
+  
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$sustained), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)] 
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov12 <- data.frame(
+  		exp = as.factor(pheno3$sustained),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  
+  results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov12)) 
+  print(class(results))
+  results <- as.data.frame(results)
+  print(class(results))
+  Nbeta <- sum(!is.na(results$P))
+  write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  
+  tmp <- results[!is.na(results$P),]
+  print(dim(tmp))
+  
+  
+  print("lambda")
+  lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  print(round(lambda, 2))
+  
+  
+  ############## 
+  
+  EXPOSURE = "SUSTAINED_FEMALES"
+  print(EXPOSURE)
+  
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$sustained))),]
+  
+  ## Restrict to female infants
+  pheno2 <- pheno2[which(pheno2$sex == 0),]
+  
+  
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID   ### CHANGE SAMPLEID TO ID IN YOUR STUDY THAT MATCHES THE COLUMN NAME IN THE METHYLATION DATA
+  print("Table of Exposure")
+  print(table(pheno2$sustained), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov12 <- data.frame(
+  		exp = as.factor(pheno3$sustained),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov12)) 
+  print(class(results))
+  results <- as.data.frame(results)
+  print(class(results))
+  Nbeta <- sum(!is.na(results$P))
+  write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  tmp <- results[!is.na(results$P),]
+  print(dim(tmp))
+  
+  print("lambda")
+  lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  print(round(lambda, 2))
+  
+  ############## 
+  EXPOSURE = "INTERACTION"
+  print(EXPOSURE)
+  
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$sustained))),]
+  
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  
+  print(table(pheno2$sustained), useNA="always")
+  
+  pheno2$interaction <- as.factor(pheno2$sustained * pheno2$sex)
+  print(head(pheno2[, c("sustained", "sex", "interaction")], 20))
+  print(table(pheno2$interaction), useNA="always")
+  
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)] 
+  dim(methylation2)
+  
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13.interaction <- data.frame(
+  		interaction = as.factor(pheno3$interaction),
+  		exp = as.factor(pheno3$sustained),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13.interaction)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+  
+  	print("lambda")
+  	lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  	print(round(lambda, 2))
+}
+
+    
+  ##############
+
+  EXPOSURE = "DOSE_ORDINAL"
+  print(EXPOSURE)
+  
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$sustained))),]
+  dim(pheno2)
+  
+  pheno2 <- pheno2[which(!(is.na(pheno2$dosage))),]
+  dim(pheno2)
+  
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$dosage), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		exp = pheno3$dosage,  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  ##############
+  EXPOSURE = "DOSE_DICHOTOMIZE"
+  print(EXPOSURE)
+  
+  pheno$dose2v1 [pheno$dosage == 2] <- 1
+  pheno$dose2v1 [pheno$dosage == 1] <- 0
+  
+  ## Restrict to Sustained Smokers and Women Who Did Not Smoke During Pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$dose2v1))),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$dose2v1), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		exp = as.factor(pheno3$dose2v1),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  ##############
+  EXPOSURE = "SHS"
+  print(EXPOSURE)
+  
+  ## Restrict to ALL women with SHS information
+  pheno2 <- pheno[which(!(is.na(pheno$SHS))),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$SHS), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov14 <- data.frame(
+  		exp = as.factor(pheno3$SHS),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		matsmk2 = as.factor(pheno3$matsmk2v0),
+  		matsmk1 = as.factor(pheno3$matsmk1v0),
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov14)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+ ##############
+  EXPOSURE = "PATERNAL_SMOKING_CURRENT_NEVER"
+  print(EXPOSURE)
+  
+  ## All women with paternal smoking (current vs never) information
+  pheno2 <- pheno[which(!(is.na(pheno$patsmk))),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID  
+  print("Table of Exposure")
+  print(table(pheno2$patsmk), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov14 <- data.frame(
+  		exp = as.factor(pheno3$patsmk),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		matsmk2 = as.factor(pheno3$matsmk2v0),
+  		matsmk1 = as.factor(pheno3$matsmk1v0),
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov14)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+  	
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  ####################################################################################
+  ### The code below is to repeat the SHS and paternal smoking analyses in women who did not smoke during pregnancy
+  
+  GROUP = "NONSMOKERS"
+  print(GROUP)
+  
+  ##############
+  EXPOSURE = "MATERNAL_FORMER"
+  print(EXPOSURE)
+  
+  ## Restrict to women who are former smokers and never smoked
+  pheno2 <- pheno[which(!(is.na(pheno$former))),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$former), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)] 
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		exp = as.factor(pheno3$former),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  ## Descriptive Info For Table
+  cov <- cov13
+  cov.desc <- data.frame()
+  
+  for (i in 1:ncol(cov)) {
+  	var <- colnames(cov[i])
+  							
+  	if (is.factor(cov[,i]) == TRUE) {
+  		zero = table(cov[,i])[1][[1]]
+  		one = table(cov[,i])[2][[1]]
+  		mean = NA
+  		sd = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	} else if (is.factor(cov[,i]) == FALSE) { 
+  		mean <- round(mean(cov[,i]),2)
+  		sd <- round(sd(cov[,i]),2)
+  		zero = NA
+  		one = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	}
+  }
+  
+  write.csv(cov.desc, paste0("DESCRIPTIVE_", EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  ##############
+  	
+  EXPOSURE = "SHS"
+  print(EXPOSURE)
+  
+  ## Restrict to women with SHS information and never smoked during pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$SHS)) & pheno$sustained == 0),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID   ### CHANGE SAMPLEID TO ID IN YOUR STUDY THAT MATCHES THE COLUMN NAME IN THE METHYLATION DATA
+  print("Table of Exposure")
+  print(table(pheno2$SHS), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  ### CHANGE SAMPLEID TO YOUR ID IN YOUR STUDY THAT MATCHES THE COLUMN NAME IN THE METHYLATION DATA
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		exp = as.factor(pheno3$SHS),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  ## Descriptive Info For Table
+  cov <- cov13
+  cov.desc <- data.frame()
+  
+  for (i in 1:ncol(cov)) {
+  	var <- colnames(cov[i])
+  							
+  	if (is.factor(cov[,i]) == TRUE) {
+  		zero = table(cov[,i])[1][[1]]
+  		one = table(cov[,i])[2][[1]]
+  		mean = NA
+  		sd = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	} else if (is.factor(cov[,i]) == FALSE) { 
+  		mean <- round(mean(cov[,i]),2)
+  		sd <- round(sd(cov[,i]),2)
+  		zero = NA
+  		one = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	}
+  }
+  
+  write.csv(cov.desc, paste0("DESCRIPTIVE_", EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  ##############
+  EXPOSURE = "PATERNAL_SMOKING_CURRENT_NEVER"
+  print(EXPOSURE)
+  
+  ## women with paternal smoking (current vs never) information and did not smoke during pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$patsmk))& pheno$sustained == 0),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID
+  print("Table of Exposure")
+  print(table(pheno2$patsmk), useNA="always")
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)] 
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		exp = as.factor(pheno3$patsmk),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  ## Descriptive Info For Table
+  cov <- cov13
+  cov.desc <- data.frame()
+  
+  for (i in 1:ncol(cov)) {
+  	var <- colnames(cov[i])
+  							
+  	if (is.factor(cov[,i]) == TRUE) {
+  		zero = table(cov[,i])[1][[1]]
+  		one = table(cov[,i])[2][[1]]
+  		mean = NA
+  		sd = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	} else if (is.factor(cov[,i]) == FALSE) { 
+  		mean <- round(mean(cov[,i]),2)
+  		sd <- round(sd(cov[,i]),2)
+  		zero = NA
+  		one = NA
+  		out = data.frame(var, zero, one, mean, sd)
+  		cov.desc <- rbind(cov.desc, out)
+  	}
+  }
+  
+  write.csv(cov.desc, paste0("DESCRIPTIVE_", EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$P))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	tmp <- results[!is.na(results$P),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  
+  ############## 
+  #For studies who can differentiate between former and never paternal smoking
+  
+  EXPOSURE = "PATERNAL_SMOKING_CURRENT_FORMER_NEVER"
+  print(EXPOSURE)
+  
+  ## women with paternal smoking (current vs never) information and did not smoke during pregnancy
+  pheno2 <- pheno[which(!(is.na(pheno$patsmk3))& pheno$sustained == 0),]
+  print("Dimensions of Pheno Data")
+  dim(pheno2)
+  rownames(pheno2) <- pheno2$sampleID 
+  print("Table of Exposure")
+  print(table(pheno2$patsmk3), useNA="always")
+  
+  pheno2$patsmk2v0 <- ifelse(pheno2$patsmk3 == 2, 1, 0)
+  pheno2$patsmk1v0 <- ifelse(pheno2$patsmk3 == 1, 1, 0)
+  
+  ## Restrict methylation data to those in the sustained analyses
+  methylation2 <- methylation[, c(colnames(methylation) %in% pheno2$sampleID)]  
+  dim(methylation2)
+  
+  ### Match up methylation data and pheno data
+  pheno3 <- pheno2[order(match(rownames(pheno2), colnames(methylation2))),]
+  head(rownames(pheno3))
+  head(colnames(methylation2))
+  
+  cov13 <- data.frame(
+  		current = as.factor(pheno3$patsmk2v0),  ## exposure
+  		former = as.factor(pheno3$patsmk1v0),  ## exposure
+  		age = pheno3$mat_age,
+  		edu1v4 = as.factor(pheno3$matedu1v4),
+  		edu2v4 = as.factor(pheno3$matedu2v4),
+  		edu3v4 = as.factor(pheno3$matedu3v4),
+  		parity = as.factor(pheno3$parity),
+  		gestage = pheno3$gestage,
+  		bmi = pheno3$mat_bmi,
+  		sex = as.factor(pheno3$sex),
+  		nRBC = pheno3$nRBC,
+  		CD8T = pheno3$CD8T,
+  		CD4T = pheno3$CD4T,
+  		NK = pheno3$NK,
+  		Bcell = pheno3$Bcell,
+  		Mono = pheno3$Mono,
+  		Gran = pheno3$Gran,
+  		Caco = pheno3$CaCo,
+  		plate = pheno3$plate
+  	)
+  
+  	results <- t(parApply(cl, methylation2, 1, RLM.Robust.patsmk.3level, cov13)) 
+  	print(class(results))
+  	results <- as.data.frame(results)
+  	print(class(results))
+  	Nbeta <- sum(!is.na(results$cursmk.p))
+  	write.csv(results, paste0(EXPOSURE, "_", STUDYNAME, "_", GROUP, "_", ANCESTRY, "_", ARRAY,"_", DATE, "_", ANALYST, ".csv"), quote=F)
+  
+  	print("Father Current Smoker")
+  	tmp <- results[!is.na(results$cursmk.p),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$cursmk.p,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  	print("Father Former Smoker")
+  	tmp <- results[!is.na(results$fmrsmk.p),]
+  	print(dim(tmp))
+    
+  	print("lambda")
+  		lambda = median(qchisq(1- tmp$fmrsmk.p,1))/qchisq(0.5,1)
+  		print(round(lambda, 2))
+  
+  stopCluster(cl)
+  rm(list=setdiff(ls(), c("race","set")))
+
+  }
+}
+
+```
+
+
+

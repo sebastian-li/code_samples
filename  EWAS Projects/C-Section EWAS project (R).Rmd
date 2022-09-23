@@ -1,0 +1,253 @@
+---
+title: "csection"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project Description: the USC portion of a multi-cohort EWAS meta-analysis, led by Harvard T.H. Chan School of Public Health. 
+
+Study description:
+
+exposure:
+C-section delivery (yes=1,no=0) 
+sensitivity analysis, uncomplicated pregnancies with C-section delivery vs. vaginal delivery
+Exclude:
+•	gestational diabetes 
+•	hypertensive disorders of pregnancy (including pre-eclampsia) 
+•	fetal macrosomia 
+
+covariates:sex, smoking (yes/no), SES, plate, gestational age (weeks),birthweight (gram), Nulliparous (yes/no), pre/early pregnancy BMI, race, cell types (7), selection variable (caco)
+
+Outcome:beta values
+
+rlm() 
+A)	Models for the analysis (cord blood DNA methylation at Birth):
+•	Base model (model 1)
+Methylation_birth = C-section delivery + maternal smoking + sex + SES + nulliparous + gestational age + birth weight + pre-pregnancy BMI + batch (+ selection) (+ ancestry)
+Cell type adjusted model (model 2)
+Methylation_birth = C-section delivery + maternal smoking + sex + SES + nulliparous + gestational age + birth weight+ pre-pregnancy BMI + batch + cord blood cell type (+ selection) (+ ancestry)
+
+C)	Sensitivity Analyses: Models for the analysis (cord blood DNA methylation at Birth) in uncomplicated pregnancies
+Base model (model 5)
+Methylation_birth = C-section delivery + maternal smoking + sex + SES + nulliparous + gestational age + birth weight + pre-pregnancy BMI + batch (+ selection) (+ ancestry)
+Cell type adjusted model (model 6)
+Methylation_birth = C-section delivery + maternal smoking + sex + SES + nulliparous + gestational age + birth weight + pre-pregnancy BMI + batch + cord blood cell type (+ selection) (+ ancestry)
+
+E) C-section as a predictor of cord blood cell type model at birth (model 9)
+Cord blood cell type (Salas method (Gervin et al)) = C-section delivery + maternal smoking + sex + SES + nulliparous + gestational age + birth weight+ pre-pregnancy BMI + batch (+ selection) (+ ancestry)
+
+probeID
+BETA
+SE
+P_VAL
+Please use the following naming convention Cohort_Csection_Model_Date.txt (e.g. Viva_Csection_model2_08012021.txt). 
+
+```{r}
+
+setwd("~/ewas/csection")
+library(data.table)
+library(tidyverse)
+library(MASS) 
+library(sandwich) 
+library(lmtest) 
+library(parallel) 
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+
+RLM.Robust <- function(meth, cov){
+
+    # meth = methyl["cg25813447",]
+    # cov = covs
+  
+    dat <- data.frame(y = meth, cov)
+    ff  <- formula(paste("y ~ ", paste0(colnames(cov), collapse="+")))
+    mod <- try(rlm(ff, data = dat, maxit = 200))
+    cf = try(coeftest(mod, vcov=vcovHC(mod, type="HC0")))
+    #cf = try(coeftest(mod))
+    #Ncase = nrow(dat %>% filter(CaCo==1) %>% na.omit)
+    #Ncontrol = nrow(dat %>% filter(CaCo==0) %>% na.omit)
+
+  	if (exists(class(cf)) == FALSE) {
+  		out = rep(NA,3)
+  	} else if (exists(class(cf)) == TRUE) {
+  		if( class(cf)[1] == "try-error") {
+  		#cat("error throw by CpG", set, ";")
+  		out = rep(NA,3)
+  		#print(paste0(cov, " - chol2inv could not be computed"))
+  		} 
+  		else {
+  			coef = cf[2,"Estimate"]
+  			se = cf[2,"Std. Error"]
+  			#z.value = cf[2,"z value"]
+  			p.value = cf[2,"Pr(>|z|)"]
+  			out = c(coef, se, p.value) 
+  		}
+    }
+  names(out) = c("Beta","SE", "P_VAL"); 
+  return(out) 
+}
+
+cl <- makeCluster(40, type="FORK")
+clusterEvalQ(cl,library(MASS))
+clusterEvalQ(cl,library(lmtest))
+
+csection = fread("~/ewas/csection/raw/allSubjects_USC_delivery.csv") %>%
+  filter(ch_delivery_int %in% c(1,2))
+
+for(set_n in c(1,2)){
+
+  dcp = fread(paste0("~/sets/set",set_n,"/idol_deconvolution.csv")) %>%
+    as.data.frame() %>%
+    dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC,Gran) %>%
+    na.omit()
+  subinfo1 <- read.csv(paste0("/ccls/home/sli/sets/set",set_n,"/clinical_variables.csv")) %>%
+    filter(Trisomy21.cnm==0) %>%
+    inner_join(csection,by=c("subjectId"="subjectid"))%>%
+    inner_join(dcp,by="beadPosition")%>%
+    mutate(motherBMI=motherWt/(motherHt/100)^2) %>%
+    dplyr::select(beadPosition,ch_delivery_int,sex,smoke_mo_preg,income,Batch,
+                  gestage,birthWt,parity,motherBMI,race,
+                  CD8T,CD4T,NK,Bcell,Mono,nRBC,Gran,CaCo) %>%
+    mutate(Batch=as.factor(Batch),
+           parity = ifelse(parity==1,0,1),
+           race=as.factor(race),
+           CaCo=as.factor(CaCo),
+           sex = as.factor(sex),
+           smoke_mo_preg = as.factor(smoke_mo_preg),
+           parity = as.factor(parity))  %>%
+    distinct(beadPosition,.keep_all=TRUE) %>%
+    column_to_rownames(var='beadPosition') %>%
+    na.omit()
+  
+  methyl = read_rds(paste0("~/sets/set",set_n,"/set",set_n,"_Sesame_beta_imputed.rds")) %>%
+    as.data.frame() 
+  rownames(methyl) <- c()
+  methyl = methyl %>%
+    column_to_rownames(var="probeId")
+  
+  subs = intersect(rownames(subinfo1),colnames(methyl))
+  
+  subinfo_model1 = subinfo1[subs,] %>%
+    dplyr::select(-CD8T,-CD4T,-NK,-Bcell,-Mono,-nRBC,-Gran)
+  
+  subinfo_model2 = subinfo1[subs,]
+  
+  outcomeinfo_model9 = subinfo1[subs,] %>%
+    dplyr::select(CD8T,CD4T,NK,Bcell,Mono,nRBC,Gran) %>%
+    t() %>%
+    as.data.frame()
+  
+  methyl_1 = methyl[,subs]
+  
+  nrow(subinfo_model1)  
+  dim(methyl_1)
+  
+  ############################################################  
+  # fill in the form
+  summary(subinfo_model1)
+  round(table(subinfo_model1$ch_delivery_int)/nrow(subinfo_model1),4)  
+  round(table(subinfo_model1$sex)/nrow(subinfo_model1),4)  
+  round(table(subinfo_model1$smoke_mo_preg)/nrow(subinfo_model1),4)  
+  
+  table(subinfo_model1$income)
+  a = round(table(subinfo_model1$income)/nrow(subinfo_model1),4)  
+  a[1]+a[2]
+  a[3]+a[4]
+  a[5]+a[6]
+
+  sd(subinfo_model1$gestage)
+  sd(subinfo_model1$birthWt)
+  
+  collectionAge <- read.csv(paste0("/ccls/home/sli/sets/set",set_n,"/clinical_variables.csv")) %>%
+    dplyr::select(beadPosition,collectionAge) %>%
+    filter(beadPosition %in% rownames(subinfo_model1)) %>%
+    na.omit()
+  mean(collectionAge$collectionAge)  
+  sd(collectionAge$collectionAge)      
+
+  sd(subinfo_model1$motherBMI)
+
+  cp = subinfo_model2 %>% dplyr::select( CD8T,CD4T,NK,Bcell,Mono,nRBC,Gran) 
+  data.frame(sep=",",
+             means = round(colMeans(cp),4),
+             sep=",",
+             sd = round(apply(cp,2,sd),4)) %>%
+    rownames_to_column(var="celltype")
+    
+  round(table(subinfo_model1$CaCo)/nrow(subinfo_model1),4)  
+  round(table(subinfo_model1$race)/nrow(subinfo_model1),4)  
+
+  ############################################################
+       
+  replace.outliers <- winsorize(methyl_1%>%as.matrix(),0.005)
+  methyl_final <- replace.outliers$methylation %>% 
+    as.data.frame()
+  
+  #methylt = methyl_final[1:100,] 
+  #results = t(apply(methylt,1,RLM.Robust,subinfo_final))
+  
+  results_1 <- t(parApply(cl, methyl_final, 1, RLM.Robust, subinfo_model1)) 
+  results_1 <- as.data.frame(results_1) %>%
+    rownames_to_column(var="probeID") 
+  
+  write.table(results_1,paste0("usc.set",set_n,"_Csection_model1_20220429.txt"),
+        quote=FALSE,
+        sep='\t')  
+  
+  results_2 <- t(parApply(cl, methyl_final, 1, RLM.Robust, subinfo_model2)) 
+  results_2 <- as.data.frame(results_2) %>%
+    rownames_to_column(var="probeID") 
+  
+  write.table(results_2,paste0("usc.set",set_n,"_Csection_model2_20220429.txt"),
+        quote=FALSE,
+        sep='\t')  
+  
+  results_9 = t(apply(outcomeinfo_model9,1,RLM.Robust,subinfo_model1))
+  results_9 <- as.data.frame(results_9) %>%
+    rownames_to_column(var="cellType") 
+  write.table(results_9,paste0("usc.set",set_n,"_Csection_model9_20220429.txt"),
+        quote=FALSE,
+        sep='\t')  
+  
+}
+
+stopCluster(cl)
+
+# reading lambda value
+for(set_n in c(1,2)){
+  model = fread(paste0("usc.set",set_n,"_Csection_model1_20220429.txt")) %>%
+    as.data.frame()
+  Nbeta <- sum(!is.na(model$P_VAL))
+  tmp <- model[!is.na(model$P_VAL),]
+  lambda = median(qchisq(1- tmp$P_VAL,1))/qchisq(0.5,1)
+  print(round(lambda, 2))
+  
+  model = fread(paste0("usc.set",set_n,"_Csection_model2_20220429.txt"))
+  Nbeta <- sum(!is.na(model$P_VAL))
+  tmp <- model[!is.na(model$P_VAL),]
+  lambda = median(qchisq(1- tmp$P_VAL,1))/qchisq(0.5,1)
+  print(round(lambda, 2))
+  
+}
+
+
+```
+

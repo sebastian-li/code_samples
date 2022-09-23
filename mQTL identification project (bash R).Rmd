@@ -1,0 +1,5282 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: to compute a database of interactions between DNA methylation and genotypes (SNPs) (mQTL database). 
+
+```{r identify refGenome.r}
+# use example: Rscript /ccls/home/sli/GWAS/libby/codes/refGenome.r ccrlp.raw.1.bim CCRLP_CleanCaCo_sub.bim
+
+### select SNPs that have opposite ref/alt alleles
+### first argument is reference, second argument is plink file to be flipped
+### this will modify the SNP name from second Plink file to be the same as reference plink file, FOR SNPS THAT NEED TO BE FLIPPED
+### firstbfile.ref.genome will be written automatically for downstream use, IN THE SAME DIRECTORY AS REFERENCE PLINK FILE, so next step will be:
+#plink --bfile flip_bfile\
+#  --reference-allele ref_bfile.ref.genome\
+#  --make-bed\
+#  --out flip_bfile_flipped
+
+
+library(tidyverse,quietly=TRUE)
+library(data.table,quietly=TRUE)
+
+arguments = commandArgs(trailingOnly=TRUE)
+
+#ref_filename = "tmp/ccrlp.raw.1.bim"
+#flip_filename = "tmp/CCRLP_CleanCaCo_sub.bim"
+
+ref_filename = arguments[1]
+flip_filename = arguments[2]
+
+ref= fread(ref_filename) %>%
+  as.data.frame()%>%
+  mutate(V1=as.character(V1),
+         V4=as.numeric(V4))
+colnames(ref) = c("chr","snp_ref","v3_ref","pos","minor_ref","major_ref")
+
+flip = fread(flip_filename) %>%
+  as.data.frame()%>%
+  mutate(V1=as.character(V1),
+         V4=as.numeric(V4))
+colnames(flip) = c("chr","snp_flip","v3_flip","pos","minor_flip","major_flip")
+
+rf_fp_cmmon = ref %>%
+  inner_join(flip,by=c("chr","pos"))
+
+rf_fp_cmmon_flip = rf_fp_cmmon %>%
+  filter(minor_ref==major_flip & major_ref==minor_flip)
+
+ref.genome = rf_fp_cmmon_flip %>%
+  dplyr::select(snp_ref,minor_ref)
+
+flip$snp_flip[which(flip$snp_flip%in%rf_fp_cmmon_flip$snp_flip)] = rf_fp_cmmon_flip$snp_ref
+
+flip$pos = format(flip$pos, scientific = F)
+
+write.table(flip, flip_filename,
+            sep='\t',
+            quote=FALSE,
+            col.names = FALSE, 
+            row.names = FALSE)
+write.table(ref.genome, paste0(gsub(".bim","",ref_filename),".ref.genome"),
+            sep='\t',
+            quote=FALSE,
+            col.names = FALSE, 
+            row.names = FALSE)
+
+```
+
+```{r identify strandIssue.r}
+# use example: Rscript /ccls/home/sli/GWAS/libby/codes/strandIssue.r ccrlp.raw.1.bim CCRLP_CleanCaCo_sub.adj.bim
+
+### select SNPs that have strand issues
+### first argument is reference, second argument is plink file to be corrected
+### this will modify the SNP name from second Plink file to be the same as reference plink file, FOR SNPS THAT NEED TO BE CORRECTED
+### firstbfile.flip.list will be written automatically for downstream use, IN THE SAME DIRECTORY AS REFERENCE PLINK FILE, so next step will be:
+#plink --bfile flip_bfile\
+# --flip flip_bfile.flip.list\
+# --make-bed\
+#  --out flip_bfile_flippedStrand
+
+library(tidyverse,quietly=TRUE)
+library(data.table,quietly=TRUE)
+
+arguments = commandArgs(trailingOnly=TRUE)
+
+alleleToNumber = function(a){
+  characterVector = a
+  for(i in 1:length(a)){
+    if(a[i]=="A")characterVector[i]=1
+    if(a[i]=="C")characterVector[i]=2
+    if(a[i]=="G")characterVector[i]=3
+    if(a[i]=="T")characterVector[i]=4
+    if(!a[i]%in%c("A","T","C","G"))characterVector[i]=NA
+  }
+  return(characterVector)
+  }
+
+#ref_filename = "tmp/ccrlp.raw.1.bim"
+#flip_filename = "tmp/CCRLP_CleanCaCo_sub.adj.bim"
+
+ref_filename = arguments[1]
+flip_filename = arguments[2]
+
+ref= fread(ref_filename) %>%
+  as.data.frame()%>%
+  mutate(V1=as.character(V1),
+         V4=as.numeric(V4))
+colnames(ref) = c("chr","snp_ref","v3_ref","pos","minor_ref","major_ref")
+
+flip = fread(flip_filename) %>%
+  as.data.frame()%>%
+  mutate(V1=as.character(V1),
+         V4=as.numeric(V4))
+colnames(flip) = c("chr","snp_flip","v3_flip","pos","minor_flip","major_flip")
+
+rf_fp_cmmon = ref %>%
+  inner_join(flip,by=c("chr","pos"))
+
+rf_fp_cmmon_flip = rf_fp_cmmon %>%
+  mutate(minor_ref_num = alleleToNumber(minor_ref),
+         major_ref_num = alleleToNumber(major_ref),
+         minor_flip_num = alleleToNumber(minor_flip),
+         major_flip_num = alleleToNumber(major_flip))
+rf_fp_cmmon_flip_1 = rf_fp_cmmon_flip %>%
+  filter(as.numeric(minor_ref_num) + as.numeric(minor_flip_num) ==5 & 
+         as.numeric(major_ref_num) + as.numeric(major_flip_num)==5)
+
+if(nrow(rf_fp_cmmon_flip_1)==0){
+  print("there is no strand flip issue. please skip this step.")
+} else{
+  
+  IDs_flip = rf_fp_cmmon_flip_1 %>%
+    dplyr::select(snp_ref)
+
+  flip$snp_flip[which(flip$snp_flip%in%rf_fp_cmmon_flip_1$snp_flip)] = rf_fp_cmmon_flip_1$snp_ref
+  
+  flip$pos = format(flip$pos, scientific = F)
+  
+  write.table(flip, flip_filename,
+              sep='\t',
+              quote=FALSE,
+              col.names = FALSE, 
+              row.names = FALSE)
+  write.table(IDs_flip, paste0(gsub(".bim","",ref_filename),".flip.list"),
+              sep='\t',
+              quote=FALSE,
+              col.names = FALSE, 
+              row.names = FALSE)
+  
+  }
+
+
+```
+
+```{r identify duplicatesLocation.r}
+# take a bim (or psam) file and output SNPs that need to be deleted (for duplicated location AND ref/alt)
+# usage:
+#Rscript /ccls/home/sli/GWAS/libby/codes/duplicatesLocation.r ccls.me.gwas.bim
+## next step would be 
+# plink --bfile ccls.gwas\
+#   --exclude ccls.me.gwas.dups.txt\
+#   --make-bed\
+#   --out ccls.gwas.nodup
+
+library(tidyverse,quietly=TRUE)
+library(data.table,quietly=TRUE)
+#library(sets,quietly=TRUE)
+
+arguments = commandArgs(trailingOnly=TRUE)
+bimfile = arguments[1]
+
+
+#setwd("/ccls/proj_circle2_p3/users/sebastian/bySET")
+#bimfile = "ccrlp.me.gwas.bim"
+#bimfile = "ccls.me.gwas.ds.pvar"
+
+if(grepl("bim",bimfile)){
+  
+  bim = fread(bimfile)
+
+  bim1 = bim %>%
+    mutate(loc_id = paste0(V1,"_",V4))
+
+  dupId_a = duplicated(bim1$loc_id,fromLast = FALSE)
+  dupId_b = duplicated(bim1$loc_id,fromLast = TRUE)
+  dupId = which(dupId_a|dupId_b)
+  
+  bim2 = bim1[dupId,] 
+  
+  sets.loc = list()
+  for(i in 1:nrow(bim2)){
+    sets.loc[[i]] = sets::as.set(c(bim2$V1[i],bim2$V4[i],bim2$V5[i],bim2$V6[i]))  
+    }
+  
+  max.dup = max(table(bim2$loc_id))
+  
+  dup.ids = list()
+  k=1
+  for(i in 1:length(sets.loc)){
+    for(j in (i+1):(i+max.dup)){
+      if(j>length(sets.loc)){next}
+      if(sets.loc[[i]]==sets.loc[[j]]){
+        dup.ids[[k]]=c(i,j)
+        k=k+1
+      } 
+    }
+  }
+  
+  dups.df = as.data.frame(do.call(rbind,dup.ids))
+  bim3 = bim2[sort(unique(c(dups.df$V1,dups.df$V2))),] 
+  
+  bim4 = bim3 %>%
+    as.data.frame()%>%
+    dplyr::distinct(loc_id,.keep_all=TRUE)
+  
+  dups = c(names(which(table(bim3$V2)>1)),setdiff(bim3$V2,bim4$V2)) %>%sort()
+  
+  write.table(dups,paste0(gsub(".bim","",bimfile),".nodup.txt"),
+              quote=FALSE,
+              row.names = FALSE,
+              col.names = FALSE,
+              sep='\t')
+  
+}else if(grepl("pvar",bimfile)){
+  
+  bim = fread(bimfile) %>% 
+    dplyr::select(-INFO,-FILTER)%>%
+    dplyr::rename("CHR"="#CHROM")
+
+  bim1 = bim %>%
+    mutate(loc_id = paste0(CHR,"_",POS))
+
+  dupId_a = duplicated(bim1$loc_id,fromLast = FALSE)
+  dupId_b = duplicated(bim1$loc_id,fromLast = TRUE)
+  dupId = which(dupId_a|dupId_b)
+  
+  bim2 = bim1[dupId,] 
+  
+  sets.loc = list()
+  for(i in 1:nrow(bim2)){
+    sets.loc[[i]] = sets::as.set(c(bim2$CHR[i],bim2$POS[i],bim2$REF[i],bim2$ALT[i]))  
+    }
+  
+  max.dup = max(table(bim2$loc_id))
+  
+  dup.ids = list()
+  k=1
+  for(i in 1:length(sets.loc)){
+    for(j in (i+1):(i+max.dup)){
+      if(j>length(sets.loc)){next}
+      if(sets.loc[[i]]==sets.loc[[j]]){
+        dup.ids[[k]]=c(i,j)
+        k=k+1
+      } 
+    }
+  }
+  
+  dups.df = as.data.frame(do.call(rbind,dup.ids))
+  bim3 = bim2[sort(unique(c(dups.df$V1,dups.df$V2))),] 
+  
+  bim4 = bim3 %>%
+    as.data.frame()%>%
+    dplyr::distinct(loc_id,.keep_all=TRUE)
+  
+  dups = c(names(which(table(bim3$ID)>1)),setdiff(bim3$ID,bim4$ID)) %>%sort()
+  
+  write.table(dups,paste0(gsub(".pvar","",bimfile),".nodup.txt"),
+              quote=FALSE,
+              row.names = FALSE,
+              col.names = FALSE,
+              sep='\t')  
+  
+}else{
+  print("Error! Input file is neither bim nor pvar.")
+}
+
+
+```
+
+# 1000 pass mqtl scanning
+
+```{r set1 and 2 subjects}
+
+setwd("/ccls/proj_circle2_p3/users/sebastian/temp")
+library(tidyverse)
+library(data.table)
+
+subinfo3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0)%>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(subjectId=as.character(subjectId)) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 3)
+
+ccrlp.set1 = fread("/ccls/home/sli/sets/set3/genetics/CCRLP_CleanCaCo_Set01/CCRLP_CleanCaCo_Set01.fam")
+ccrlp.set2 = fread("/ccls/home/sli/sets/set3/genetics/CCRLP_CleanCaCo_Set02/CCRLP_CleanCaCo_Set02.fam")
+
+subs.set1 = ccrlp.set1$V2 %>% sub(".*_","",.) %>% sub("-01","",.)
+a.set1 = (subs.set1 %in% subinfo3$subjectId )
+subs.set2 = ccrlp.set2$V2 %>% sub(".*_","",.) %>% sub("-01","",.)
+a.set2 = (subs.set2 %in% subinfo3$subjectId )
+
+set1.sub = ccrlp.set1[which(a.set1),c("V1","V2")]
+set2.sub = ccrlp.set2[which(a.set2),c("V1","V2")]
+
+write.table(set1.sub,"set1.sub.txt",quote=FALSE,col.names = FALSE, row.names = FALSE, sep='\t')
+write.table(set2.sub,"set2.sub.txt",quote=FALSE,col.names = FALSE, row.names = FALSE, sep='\t')
+
+```
+
+```{r check set 3}
+
+setwd("/ccls/proj_circle2_p3/users/sebastian/temp")
+library(tidyverse)
+library(data.table)
+
+#setwd("/ccls/proj_circle2_p3/users/sebastian/bySET")
+subinfo3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0)%>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(subjectId=as.character(subjectId)) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 3)
+
+famFile3 <- read.table("tmp/ccrlp.raw.fam")%>% # this file is generated in the next BASH block
+  mutate(V2_old=V2) %>%
+  filter(!grepl("Mother",V2))%>%
+  mutate(V2_int=gsub(".*_","",V2))%>%
+  mutate(V2_int=gsub(".CEL","",V2_int))%>%
+  mutate(V2_int=gsub("-01","",V2_int))%>%
+  mutate(V2_int=as.character(as.integer(V2_int))) %>%
+  filter(!is.na(V2_int)) %>%
+  inner_join(subinfo3,by=c("V2_int"="subjectId")) %>%
+  distinct(V2_int,.keep_all=TRUE)
+colnames(famFile3)[1:6] <- c("FID","IID","IID_fa","IID_mo","sex_ori","phenotype_ori")
+
+#dups = names(which(table(famFile3$V2_int)==2))
+
+famFile3FamFile = famFile3 %>%
+  dplyr::select(FID,IID,IID_fa,IID_mo,sex,phenotype)
+
+
+write.table(famFile3FamFile,"set3.child.fam.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+bimfile = fread("tmp/ccrlp.raw.4.bim")
+```
+
+```{r check set ccls}
+
+setwd("/ccls/proj_circle2_p3/users/sebastian/temp")
+library(tidyverse)
+library(data.table)
+
+#setwd("/ccls/proj_circle2_p3/users/sebastian/bySET")
+subinfo <- read.csv("~/GWAS/libby/clinical/sebastian_ccls_pheno.csv") %>%
+  distinct(subjectid,.keep_all=TRUE) %>%
+  dplyr::select(subjectid,caco) 
+
+famFile <- read.table("ccls.gwas.fam")%>% # this file is generated in the next BASH block
+  mutate(V2=as.integer(V2))%>%
+  filter(!is.na(V2)) %>%
+  inner_join(subinfo,by=c("V2"="subjectid")) %>%
+  distinct(V2,.keep_all=TRUE) %>%
+  dplyr::select(-V6)
+
+write.table(famFile,"set.ccls.fam.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+```
+
+```{bash imputing all subjects on topmed}
+
+cd /ccls/proj_circle2_p3/users/sebastian/temp
+
+########################################################################
+# set 3: ccrlp
+## PART 1 
+plink2 --vcf /ccls/home/sli/sets/set3/genetics/USC_LAT_Child_VCF_04132020.vcf\
+  --max-alleles 2\
+  --out tmp/ccrlp.raw.1\
+  --make-bed
+
+cp tmp/ccrlp.raw.1.bim tmp/ccrlp.raw.1.bim.bkp
+awk '{print $1,$1":"$4":"$6":"$5,$3,$4,$5,$6}' tmp/ccrlp.raw.1.bim.bkp > tmp/ccrlp.raw.1.bim
+
+## PART 2
+plink2 --bfile /ccls/home/sli/sets/set3/genetics/CCRLP_CleanCaCo_Set01/CCRLP_CleanCaCo_Set01\
+  --keep set1.sub.txt\
+  --make-bed\
+  --out tmp/CCRLP_CleanCaCo_Set01_sub
+
+plink2 --bfile /ccls/home/sli/sets/set3/genetics/CCRLP_CleanCaCo_Set02/CCRLP_CleanCaCo_Set02\
+  --keep set2.sub.txt\
+  --make-bed\
+  --out tmp/CCRLP_CleanCaCo_Set02_sub
+
+plink --bfile tmp/CCRLP_CleanCaCo_Set02_sub\
+  --bmerge tmp/CCRLP_CleanCaCo_Set01_sub\
+  --allow-no-sex\
+  --merge-equal-pos\
+  --out tmp/CCRLP_CleanCaCo_sub
+
+cp tmp/CCRLP_CleanCaCo_sub.bim tmp/CCRLP_CleanCaCo_sub.bim.bkp
+awk '{print $1,$1":"$4":"$6":"$5,$3,$4,$5,$6}' tmp/CCRLP_CleanCaCo_sub.bim.bkp > tmp/CCRLP_CleanCaCo_sub.bim
+
+## merging PART 1 and PART 2
+### select SNPs that have opposite ref/alt alleles
+Rscript /ccls/home/sli/GWAS/libby/codes/refGenome.r tmp/ccrlp.raw.1.bim tmp/CCRLP_CleanCaCo_sub.bim
+
+plink --bfile tmp/CCRLP_CleanCaCo_sub\
+  --reference-allele tmp/ccrlp.raw.1.ref.genome\
+  --make-bed\
+  --out tmp/CCRLP_CleanCaCo_sub.adj
+
+# Resolve strand issues
+Rscript /ccls/home/sli/GWAS/libby/codes/strandIssue.r tmp/ccrlp.raw.1.bim tmp/CCRLP_CleanCaCo_sub.adj.bim
+
+# merging 2 sets
+plink --bfile tmp/CCRLP_CleanCaCo_sub.adj\
+  --bmerge tmp/ccrlp.raw.1\
+  --allow-no-sex\
+  --out tmp/ccrlp.raw
+
+# choose the right subjects and add in info
+plink --bfile tmp/ccrlp.raw\
+  --keep set3.child.fam.txt\
+  --indiv-sort f set3.child.fam.txt\
+  --make-bed\
+  --out tmp/ccrlp.raw.child
+# 843594 variants and 565 people pass filters and QC.
+
+cp tmp/ccrlp.raw.child.fam tmp/ccrlp.raw.child.fam.bk
+cp set3.child.fam.txt tmp/ccrlp.raw.child.fam
+
+#some QC steps
+# (1)	Delete SNPs with more than 20% missing. (this excluded all mt, x, y SNPs. so sex check will not be done)
+plink --bfile tmp/ccrlp.raw.child --geno 0.2 --make-bed --out tmp/ccrlp.raw.1 
+# 83878 variants removed due to missing genotype data (--geno).
+
+# (2)	Delete individuals with more than 20% missing 
+plink --bfile tmp/ccrlp.raw.1  --mind 0.2 --make-bed --out tmp/ccrlp.raw.2
+# 0 people removed due to missing genotype data (--mind).
+
+# (3)	Delete SNPs with more than 5% missing.
+plink --bfile tmp/ccrlp.raw.2 --geno 0.05 --make-bed --out tmp/ccrlp.raw.3
+# 739 variants removed due to missing genotype data (--geno).
+
+# (4)	Delete individuals with more than 5% missing.
+plink --bfile tmp/ccrlp.raw.3 --mind 0.05 --make-bed --out tmp/ccrlp.raw.4
+# 0 people removed due to missing genotype data (--mind).
+
+#  (5)	Selecting SNPs with HWE p-value below 1e-4 
+plink --bfile tmp/ccrlp.raw.4 --hwe 1e-4 --make-bed --out tmp/ccrlp.raw.5
+# --hwe: 2320 variants removed due to Hardy-Weinberg exact test.
+
+# (6)	 Remove SNPs with low MAF
+plink --bfile tmp/ccrlp.raw.5 -maf 0.01 --make-bed --out tmp/ccrlp.raw.6
+# 93348 variants removed due to minor allele threshold(s)
+
+plink --bfile tmp/ccrlp.raw.6\
+  --allow-no-sex\
+  --recode vcf bgz\
+  --keep-allele-order\
+  --out tmp/ccrlp.raw
+
+bcftools sort tmp/ccrlp.raw.vcf.gz -Oz -o tmp/ccrlp.raw.sorted.vcf.gz 
+tabix tmp/ccrlp.raw.sorted.vcf.gz
+
+for chr in {1..22}; do
+  bcftools view --regions "${chr}" tmp/ccrlp.raw.sorted.vcf.gz -o \
+  ccrlp.raw.chr"${chr}".vcf.gz -Oz &
+done
+
+########################################################################
+# ccls
+cd /ccls/home/sli/GWAS/libby/
+
+# Combining CCLS caco data sets from different chromosomes to 1 file set
+for chr in {1..22}; do
+  plink --bfile /ccls/data_ccls_gwas/raw/chr"${chr}" \
+    --snps-only 'just-acgt'\
+    --make-bed \
+    --out ccls/chr"${chr}".snp
+done  
+
+find ccls/ -name "chr*.snp.bim" > ccls/forMerge_ccls.list
+sed -i 's/.bim//g' ccls/forMerge_ccls.list
+plink --merge-list ccls/forMerge_ccls.list \
+  --make-bed \
+  --out ccls/ccls.1.gwas
+
+## Remove samples failing QC due to libby's email
+plink --bfile  ccls/ccls.1.gwas \
+  --remove ccls/ccls.rmv \
+  --make-bed \
+  --out /ccls/home/sli/GWAS/libby/v2/ccls.gwas
+
+awk '{print $1, $1":"$4":"$6":"$5, $3,$4, $5, $6}' v2/ccls.gwas.bim > v2/ccls.gwas.update.bim
+mv v2/ccls.gwas.update.bim v2/ccls.gwas.bim
+
+cp /ccls/home/sli/GWAS/libby/v2/ccls.gwas.??? /ccls/proj_circle2_p3/users/sebastian/temp
+
+cd /ccls/proj_circle2_p3/users/sebastian/temp
+
+plink --bfile ccls.gwas\
+  --keep set.ccls.fam.txt\
+  --indiv-sort f set.ccls.fam.txt\
+  --make-bed\
+  --out tmp/ccls.gwas.nodup
+cp tmp/ccls.gwas.nodup.fam tmp/ccls.gwas.nodup.fam.bkp
+cp set.ccls.fam.txt tmp/ccls.gwas.nodup.fam
+
+#some QC steps
+# (1)	Delete SNPs with more than 20% missing. (this excluded all mt, x, y SNPs. so sex check will not be done)
+plink --bfile tmp/ccls.gwas.nodup --geno 0.2 --make-bed --out tmp/ccls.raw.1 
+# 0 variants removed due to missing genotype data (--geno).
+
+# (2)	Delete individuals with more than 20% missing 
+plink --bfile tmp/ccls.raw.1  --mind 0.2 --make-bed --out tmp/ccls.raw.2
+# 0 people removed due to missing genotype data (--mind).
+
+# (3)	Delete SNPs with more than 5% missing.
+plink --bfile tmp/ccls.raw.2 --geno 0.05 --make-bed --out tmp/ccls.raw.3
+# 1761 variants removed due to missing genotype data (--geno).
+
+# (4)	Delete individuals with more than 5% missing.
+plink --bfile tmp/ccls.raw.3 --mind 0.05 --make-bed --out tmp/ccls.raw.4
+# 1 person removed due to missing genotype data (--mind).
+
+#  (5)	Selecting SNPs with HWE p-value below 1e-4
+plink --bfile tmp/ccls.raw.4 --hwe 1e-4 --make-bed --out tmp/ccls.raw.5
+# --hwe: 14537 variants removed due to Hardy-Weinberg exact test.
+
+# (6)	 Remove SNPs with low MAF
+plink --bfile tmp/ccls.raw.5 -maf 0.01 --make-bed --out tmp/ccls.raw.6
+# 326 variants removed due to minor allele threshold(s)
+
+plink --bfile tmp/ccls.raw.6\
+  --allow-no-sex\
+  --recode vcf bgz\
+  --keep-allele-order\
+  --out tmp/ccls.raw
+
+bcftools sort tmp/ccls.raw.vcf.gz -Oz -o tmp/ccls.raw.sorted.vcf.gz 
+tabix tmp/ccls.raw.sorted.vcf.gz
+
+for chr in {1..22}; do
+  bcftools view --regions "${chr}" tmp/ccls.raw.sorted.vcf.gz -o \
+  ccls.raw.chr"${chr}".vcf.gz -Oz &
+done
+
+
+```
+
+```{bash download form topmed, unzip, and prepare plink files}
+
+########################################################################
+# ccls
+
+cd /ccls/proj_circle2_p3/users/sebastian/temp/iptd
+for chr in {1..22}; do
+  unzip -P 'gCMQfCujjyo7E1' chr_"${chr}".zip
+  echo chr_"${chr}".zip unzip success
+done  
+
+cd /ccls/proj_circle2_p3/users/sebastian/temp/iptd
+
+# Choose SNPs with high imputation scores
+for chr in {1..22};do
+  awk '($7 >0.6) {print $1}' <(zcat chr"${chr}".info.gz) | sed '1d' >\
+      include.06.chr"${chr}".txt;
+  awk '($7 >0.9) {print $1}' <(zcat chr"${chr}".info.gz) | sed '1d' >\
+      include.09.chr"${chr}".txt;
+done
+
+# Convert imputed data to plink files
+# dosage=HDS \ # don't want any missing data so ignore this option which causes missing values.
+cd /ccls/proj_circle2_p3/users/sebastian/temp/iptd
+for chr in {1..22};do
+  plink2 --vcf chr"${chr}".dose.vcf.gz\
+    --max-alleles 2 \
+    --min-alleles 2 \
+    --extract include.06.chr"${chr}".txt\
+    --maf 0.01\
+    --make-bed\
+    --out chr"${chr}".imputed\
+    --threads 200
+done
+
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+find /ccls/proj_circle2_p3/users/sebastian/temp/iptd -maxdepth 1 -name "chr*.imputed.bim" >\
+  /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.list 
+sed -i 's/.bim//g' /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.list
+plink --merge-list /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.list\
+  --make-bed\
+  --out ccls.gwas
+
+cp ccls.gwas.fam ccls.gwas.fam.backup
+
+#####################################
+# include dosage in the output
+cd /ccls/proj_circle2_p3/users/sebastian/temp/iptd
+
+for chr in {1..22};do
+  plink2 --vcf chr"${chr}".dose.vcf.gz\
+      dosage=HDS\
+    --max-alleles 2 \
+    --min-alleles 2 \
+    --extract include.06.chr"${chr}".txt\
+    --maf 0.01\
+    --make-pgen\
+    --out chr"${chr}".imputed.ds\
+    --threads 200
+done
+
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+find /ccls/proj_circle2_p3/users/sebastian/temp/iptd -maxdepth 1 -name "chr*.imputed.ds.pgen" >\
+  /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.ds.list 
+  
+sed -i 's/.pgen//g' /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.ds.list
+plink2 --pmerge-list /ccls/proj_circle2_p3/users/sebastian/temp/iptd/ccls.ds.list\
+  --make-pgen\
+  --out ccls.gwas.ds
+
+# PCA for every single person, regardless of methylation availability (for Xiaomei)
+plink --bfile ccls.gwas.ds\
+  --maf 0.1 \
+  --indep-pairwise 50 10 0.1 \
+  --out temp/ccls.gwas.ds.pruned
+plink2 --bfile ccls.gwas.ds\
+  --extract temp/ccls.gwas.ds.pruned.prune.in \
+  --pca 10\
+  --out ccls.gwas.ds.pc\
+  --threads 200
+
+########################################################################
+# set 3: ccrlp
+cd /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd
+
+for chr in {1..22}; do
+  unzip -P 'dSxTC3naC3rM7J' chr_"${chr}".zip
+  echo chr_"${chr}".zip unzip success
+done  
+
+cd /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd
+
+# Choose SNPs with high imputation scores
+for chr in {1..22};do
+  awk '($7 >0.6) {print $1}' <(zcat chr"${chr}".info.gz) | sed '1d' >\
+      include.06.chr"${chr}".txt;
+  awk '($7 >0.9) {print $1}' <(zcat chr"${chr}".info.gz) | sed '1d' >\
+      include.09.chr"${chr}".txt;
+done
+
+# Convert imputed data to plink files
+# dosage=HDS \ # don't want any missing data so ignore this option which causes missing values.
+cd /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd
+for chr in {1..22};do
+  plink2 --vcf chr"${chr}".dose.vcf.gz\
+    --max-alleles 2 \
+    --min-alleles 2 \
+    --extract include.06.chr"${chr}".txt\
+    --maf 0.01\
+    --make-bed\
+    --out chr"${chr}".imputed\
+    --threads 200
+done
+
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+find /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd -maxdepth 1 -name "chr*.imputed.bim" >\
+  /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/ccrlp_iptd.list 
+sed -i 's/.bim//g' /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/ccrlp_iptd.list
+plink --merge-list /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/ccrlp_iptd.list\
+  --make-bed\
+  --out ccls.gwas.set3.all
+
+#####################################
+# include dosage in the output
+cd /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd
+
+for chr in {1..22};do
+  plink2 --vcf chr"${chr}".dose.vcf.gz\
+      dosage=HDS\
+    --max-alleles 2 \
+    --min-alleles 2 \
+    --extract include.06.chr"${chr}".txt\
+    --maf 0.01\
+    --make-pgen\
+    --out chr"${chr}".imputed.ds\
+    --threads 200
+done
+
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+find /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd -maxdepth 1 -name "chr*.imputed.ds.pgen" >\
+  /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/cclrlp.ds.list 
+  
+sed -i 's/.pgen//g' /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/cclrlp.ds.list
+plink2 --pmerge-list /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/cclrlp.ds.list\
+  --make-pgen\
+  --out ccls.gwas.set3.all.ds
+
+```
+
+extract for keren
+
+```{bash}
+###############extract for keren
+#rs1451367 
+# 7:50409963
+#rs17133807
+# 7:50409989
+
+cd ~/GWAS
+
+nano keren.extract.txt
+chr7:50409963:C:T
+chr7:50409989:G:A
+
+chr=7
+
+# ccls
+plink2 --vcf /ccls/proj_circle2_p3/users/sebastian/temp/iptd/chr"${chr}".dose.vcf.gz\
+  --extract keren.extract.txt\
+  --make-bed\
+  --out keren.extract.sets124
+
+plink --bfile keren.extract.sets124\
+  --recode vcf bgz\
+  --keep-allele-order\
+  --out keren.extract.sets124
+
+# ccrlp
+plink2 --vcf /ccls/proj_circle2_p3/users/sebastian/temp/ccrlp_iptd/chr"${chr}".dose.vcf.gz\
+  --extract keren.extract.txt\
+  --make-bed\
+  --out keren.extract.set3
+
+plink --bfile keren.extract.set3\
+  --recode vcf bgz\
+  --keep-allele-order\
+  --out keren.extract.set3
+
+
+```
+
+```{r check set 3}
+
+setwd("/ccls/proj_circle2_p3/users/sebastian/bySET")
+subinfo3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0)%>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(subjectId=as.character(subjectId)) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 3)
+
+famFile3 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.fam.backup")%>%
+  mutate(V2_old=V2) %>%
+  filter(!grepl("Mother",V2))%>%
+  mutate(V2_int=gsub(".*_","",V2))%>%
+  mutate(V2_int=gsub(".CEL","",V2_int))%>%
+  mutate(V2_int=gsub("-01","",V2_int))%>%
+  mutate(V2_int=as.integer(V2_int)) %>%
+  mutate(V2_num=ifelse(is.na(V2_int),V2,V2_int))%>%
+  dplyr::select(-V2_int) %>%
+  inner_join(subinfo3,by=c("V2_num"="subjectId"))
+colnames(famFile3)[1:6] <- c("FID","IID","IID_fa","IID_mo","sex_ori","phenotype_ori")
+dups = names(which(table(famFile3$V2_num)==2))
+dups.set3= famFile3 %>% 
+  filter(V2_num%in%dups) %>% 
+  arrange(V2_num) %>% 
+  distinct(V2_num,.keep_all=TRUE) %>%
+  dplyr::select(V2_old) 
+#write.csv(dups.set3,"dups.set3.csv")
+
+geno <- read.table("~/sets/set3/genetics/ccls.set3.hg38.fam") %>%
+  as.data.frame() %>%
+  select(V1,V2)
+
+old_vcf <- read.csv("~/sets/set3/clinical_variables.csv",row.names = 1) %>% 
+  filter(Trisomy21==0)%>%
+  mutate(plate = paste0("plate_",gsub("_.*$","",beadPosition))) %>%
+  select(beadPosition,subjectId, sex, plate, CaCo, race)%>%
+  inner_join(geno,by=c("subjectId"="V2"))
+
+
+(famFile3$IID %in% old_vcf$subjectId) %>% sum()
+famFile3$IID[which(!famFile3$IID %in% old_vcf$subjectId)]
+
+(famFile3$IID %in% old_vcf$subjectId) %>% sum()
+
+(old_vcf$subjectId %in% ccrlp.gwas$subjectId) %>% sum()
+
+(subinfo3$subjectId %in% ccrlp.gwas$subjectId)&(!subinfo3$subjectId %in% famFile3$IID)
+
+
+(subinfo3$subjectId %in% old_vcf$subjectId) %>% sum()
+
+```
+
+```{r 0 data preparation for subjects}
+
+library(tidyverse)
+library(data.table)
+setwd("/ccls/proj_circle2_p3/users/sebastian/bySET")
+
+#####
+# sets 1,2,4
+sub1 <- read.csv("/ccls/home/sli/sets/set1/clinical_variables.csv") %>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 1)
+
+sub2 <- read.csv("/ccls/home/sli/sets/set2/clinical_variables.csv") %>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 2)
+
+sub4 <- read.csv("/ccls/home/sli/sets/set4/clinical_variables.csv") %>%
+  filter(smp_type == "bg") %>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 4)
+
+subinfo <- rbind(sub1,sub2,sub4) %>% 
+  distinct(subjectId, .keep_all = TRUE) %>%
+  mutate(subjectId = as.character(subjectId))%>%
+  as.data.frame()
+
+## Change fam file into a more recognizable format
+famFile <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.fam.backup")%>%
+    mutate(V2=gsub("^0_","",V2))
+colnames(famFile) <- c("FID","IID","IID_fa","IID_mo","sex_ori","phenotype_ori")
+
+famFile_1 <- famFile %>% left_join(subinfo, by= c("IID" = "subjectId")) %>%
+  filter(!is.na(beadPosition))
+
+famFile_2 <- famFile_1 %>%
+  dplyr::select(FID,IID,IID_fa,IID_mo,sex,phenotype,beadPosition, race, set) 
+
+famFile_id <- famFile_1 %>%
+  mutate(IID_neo = paste0("0_",IID)) %>%
+  dplyr::select(FID,IID_neo) 
+
+famFile_fam <- famFile_1 %>%
+  dplyr::select(FID,IID,IID_fa,IID_mo,sex,phenotype) 
+
+write.table(famFile_id,"/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.ids", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+write.table(famFile_fam,"/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.methyl.fam",
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+write.table(famFile_2,"/ccls/home/sli/GWAS/ccls_source_data/ccls_var.txt", 
+            row.names = FALSE, col.names = TRUE, quote = FALSE, sep='\t')
+
+## Creat subject lists for each set (1,2,4)
+
+set1 <- famFile_2 %>%
+  filter(set == 1) %>%
+  select(FID,IID)
+write.table(set1,"/ccls/proj_circle2_p3/users/sebastian/bySET/set1.txt", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+set2 <- famFile_2 %>%
+  filter(set == 2) %>%
+  select(FID,IID)
+write.table(set2,"/ccls/proj_circle2_p3/users/sebastian/bySET/set2.txt", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+set4 <- famFile_2 %>%
+  filter(set == 4) %>%
+  select(FID,IID)
+write.table(set4,"/ccls/proj_circle2_p3/users/sebastian/bySET/set4.txt", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+
+###########################################################################
+# set 3
+
+subinfo3 <- read.csv("/ccls/home/sli/sets/set3/clinical_variables.csv") %>%
+  filter(Trisomy21==0)%>%
+  dplyr::select(beadPosition,subjectId,sex,CaCo,race) %>%
+  mutate(subjectId=as.character(subjectId)) %>%
+  mutate(phenotype = ifelse(CaCo==0,1,2)) %>%
+  dplyr::select(-CaCo) %>%
+  mutate(set = 3)
+
+dups = read.csv('dups.set3.csv') %>%
+  as.data.frame()
+
+famFile3 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.all.fam") %>%
+  as.data.frame()
+famFile3$V2_int = famFile3$V2
+ind.na = which((famFile3$V2)%in%(dups$V2_old))
+famFile3$V2_int[ind.na] = "NA"
+
+famFile3 = famFile3 %>%
+  mutate(V2_int=ifelse(grepl("Mother",V2),NA,V2_int))%>%
+  mutate(V2_int=gsub(".*_","",V2_int))%>%
+  mutate(V2_int=gsub(".CEL","",V2_int))%>%
+  mutate(V2_int=gsub("-01","",V2_int))%>%
+  mutate(V2_int=as.integer(V2_int)) %>%
+  mutate(V2=ifelse(is.na(V2_int),V2,V2_int))%>%
+  mutate(V2=paste0("0_",V2))%>%
+  dplyr::select(-V2_int)
+colnames(famFile3) <- c("FID","IID","IID_fa","IID_mo","sex_ori","phenotype_ori")
+
+famFile3 = famFile3 %>%
+  mutate(IID=gsub("0_","",IID))
+
+write.table(famFile3,"/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.all.fam.idNEO", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+famFile_1 <- famFile3 %>% 
+  left_join(subinfo3, by= c("IID" = "subjectId")) %>%
+  filter(!is.na(beadPosition))
+
+famFile_2 <- famFile_1 %>%
+  dplyr::select(FID,IID,IID_fa,IID_mo,sex,phenotype,beadPosition, race, set) 
+
+famFile_id <- famFile_1 %>%
+  dplyr::select(FID,IID) 
+
+famFile_fam <- famFile_1 %>%
+  dplyr::select(FID,IID,IID_fa,IID_mo,sex,phenotype) 
+
+write.table(famFile_id,"/ccls/proj_circle2_p3/users/sebastian/bySET/ccrlp.ids", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+write.table(famFile_fam,"/ccls/proj_circle2_p3/users/sebastian/bySET/ccrlp.gwas.methyl.fam",
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+write.table(famFile_2,"/ccls/home/sli/GWAS/ccls_source_data/ccrlp_var.txt", 
+            row.names = FALSE, col.names = TRUE, quote = FALSE, sep='\t')
+
+## Creat subject lists for set 3
+set3 <- famFile_2 %>%
+  filter(set == 3) %>%
+  select(FID,IID)
+write.table(set3,"/ccls/proj_circle2_p3/users/sebastian/bySET/set3.txt", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE, sep='\t')
+
+```
+
+```{bash choose sets 1234 subjects from imputed ccls}
+
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+######################################################
+#########without dosage info
+# sets 124
+plink --bfile ccls.gwas\
+  --keep ccls.ids\
+  --indiv-sort f ccls.ids\
+  --make-bed\
+  --out ccls.me.gwas
+
+mv ccls.me.gwas.fam ccls.me.gwas.fam.backup
+cp ccls.gwas.methyl.fam ccls.me.gwas.fam
+
+awk '{print $1,"chr"$1":"$4":"$6":"$5,$3,$4,$5,$6}' ccls.me.gwas.bim > ccls.me.gwas.bim.temp
+mv ccls.me.gwas.bim.temp ccls.me.gwas.bim
+
+# remove SNPs with the same location AND ref/alt, ccls.me.gwas.nodup.txt will be automatically generated
+Rscript /ccls/home/sli/GWAS/libby/codes/duplicatesLocation.r ccls.me.gwas.bim
+
+plink --bfile ccls.me.gwas\
+  --exclude ccls.me.gwas.nodup.txt\
+  --make-bed\
+  --out ccls.me.gwas.nodup
+
+# choose subjects for different sets
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+for set in 1 2 4; do
+  plink --bfile ccls.me.gwas.nodup\
+    --keep set$set.txt\
+    --keep-allele-order\
+    --maf 0.01\
+    --make-bed\
+    --out ccls.gwas.set$set
+    
+  # set1: 9129560 variants and 428 people pass filters and QC
+  # set2: 9240323 variants and 394 people pass filters and QC
+  # set4: 9252461 variants and 578 people pass filters and QC
+done
+
+
+# have a complete CCLS PC values
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.me.gwas.nodup\
+  --maf 0.1 \
+  --indep-pairwise 50 10 0.1 \
+  --out ~/mQTL/ccls.pca.pruned
+plink2 --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.me.gwas.nodup\
+  --extract ~/mQTL/ccls.pca.pruned.prune.in \
+  --pca 10\
+  --out ~/mQTL/ccls.ccls.pc\
+  --threads 200
+
+
+
+# set 3
+cp ccls.gwas.set3.all.fam ccls.gwas.set3.all.fam.backup
+cp ccls.gwas.set3.all.fam.idNEO ccls.gwas.set3.all.fam
+
+plink --bfile ccls.gwas.set3.all\
+  --keep ccrlp.ids\
+  --indiv-sort f ccrlp.ids\
+  --make-bed\
+  --out ccrlp.me.gwas
+
+mv ccrlp.me.gwas.fam ccrlp.me.gwas.fam.backup
+cp ccrlp.gwas.methyl.fam ccrlp.me.gwas.fam
+
+awk '{print $1,"chr"$1":"$4":"$6":"$5,$3,$4,$5,$6}' ccrlp.me.gwas.bim > ccrlp.me.gwas.bim.temp
+mv ccrlp.me.gwas.bim.temp ccrlp.me.gwas.bim
+
+Rscript /ccls/home/sli/GWAS/libby/codes/duplicatesLocation.r ccrlp.me.gwas.bim
+
+plink --bfile ccrlp.me.gwas\
+  --exclude ccrlp.me.gwas.nodup.txt\
+  --make-bed\
+  --out ccrlp.me.gwas.nodup
+
+set=3
+plink --bfile ccrlp.me.gwas.nodup\
+  --keep set$set.txt\
+  --keep-allele-order\
+  --maf 0.01\
+  --make-bed\
+  --out ccls.gwas.set$set
+
+
+######################################################
+#########with dosage info
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+# sets 124
+plink2 --pfile ccls.gwas.ds\
+  --keep ccls.ids\
+  --indiv-sort f ccls.ids\
+  --make-pgen\
+  --out ccls.me.gwas.ds
+
+mv ccls.me.gwas.ds.psam ccls.me.gwas.ds.psam.backup
+cp ccls.gwas.methyl.fam ccls.me.gwas.ds.psam
+
+awk  -v OFS="\t" '{
+  if($1~/^#/)
+    print $0;
+  else print $1,$2,"chr"$1":"$2":"$4":"$5,$4,$5,$6,$7
+  }' ccls.me.gwas.ds.pvar > ccls.me.gwas.ds.pvar.temp
+mv ccls.me.gwas.ds.pvar.temp ccls.me.gwas.ds.pvar
+
+# remove SNPs with the same location AND ref/alt, ccls.me.gwas.nodup.txt will be automatically generated
+Rscript /ccls/home/sli/GWAS/libby/codes/duplicatesLocation.r ccls.me.gwas.ds.pvar
+
+plink2 --pfile ccls.me.gwas.ds\
+  --exclude ccls.me.gwas.ds.nodup.txt\
+  --make-pgen\
+  --out ccls.me.gwas.ds.nodup
+
+# choose subjects for different sets
+cd /ccls/proj_circle2_p3/users/sebastian/bySET
+
+for set in 1 2 4; do
+  plink2 --pfile ccls.me.gwas.ds.nodup\
+    --keep set$set.txt\
+    --keep-allele-order\
+    --maf 0.01\
+    --make-pgen\
+    --out ccls.gwas.set$set
+    
+  # set1: 9129560 variants and 428 people pass filters and QC.
+  # set2: 9240323 variants and 394 people pass filters and QC
+  # set4: 9252461 variants and 578 people pass filters and QC
+done
+
+# set 3
+cp ccls.gwas.set3.all.ds.psam ccls.gwas.set3.all.ds.psam.backup
+cp ccls.gwas.set3.all.fam.idNEO ccls.gwas.set3.all.ds.psam
+
+plink2 --pfile ccls.gwas.set3.all.ds\
+  --keep ccrlp.ids\
+  --indiv-sort f ccrlp.ids\
+  --make-pgen\
+  --out ccrlp.me.gwas.ds
+
+mv ccrlp.me.gwas.ds.psam ccrlp.me.gwas.ds.psam.backup
+cp ccrlp.gwas.methyl.fam ccrlp.me.gwas.ds.psam
+
+awk  -v OFS="\t" '{
+  if($1~/^#/)
+    print $0;
+  else print $1,$2,"chr"$1":"$2":"$4":"$5,$4,$5,$6,$7
+  }' ccrlp.me.gwas.ds.pvar > ccrlp.me.gwas.ds.pvar.temp
+mv ccrlp.me.gwas.ds.pvar.temp ccrlp.me.gwas.ds.pvar
+
+Rscript /ccls/home/sli/GWAS/libby/codes/duplicatesLocation.r ccrlp.me.gwas.ds.pvar
+
+plink2 --pfile ccrlp.me.gwas.ds\
+  --exclude ccrlp.me.gwas.ds.nodup.txt\
+  --make-pgen\
+  --out ccrlp.me.gwas.ds.nodup
+
+set=3
+plink2 --pfile ccrlp.me.gwas.ds.nodup\
+  --keep set$set.txt\
+  --keep-allele-order\
+  --maf 0.01\
+  --make-pgen\
+  --out ccls.gwas.set$set
+  
+```
+
+```{r prepare a lifted over methylation annotation set}
+library(tidyverse)
+setwd("~/mQTL")
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start = pos, end = pos+1, pid = Name, gid = Islands_Name) %>%
+  dplyr::select(chr, start, end, pid, gid, strand) %>%
+  arrange(chr,start)
+anno[anno==""]<-NA # code all empty cells to NA
+
+write.table(anno,"liftover.methy/450k.anno.txt",
+            sep='\t', row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b2.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b2.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b2.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start = pos, end = pos+1, pid = Name, gid = Islands_Name) %>%
+  dplyr::select(chr, start, end, pid, gid, strand)%>%
+  arrange(chr,start)
+annoEPIC[annoEPIC==""]<-NA # code all empty cells to NA
+
+write.table(annoEPIC,"liftover.methy/EPIC.anno.txt",
+            sep='\t', row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+```
+
+```{bash prepare a lifted over methylation annotation set}
+
+cd /ccls/home/sli/mQTL/liftover.methy
+
+liftOver 450k.anno.txt /ccls/home/sli/dependencies/liftOver/hg19ToHg38.over.chain \
+  hg38.450k.anno.txt unlifted.450k.bed
+
+liftOver EPIC.anno.txt /ccls/home/sli/dependencies/liftOver/hg19ToHg38.over.chain \
+  hg38.EPIC.anno.txt unlifted.EPIC.bed
+
+```
+
+```{r Preparing a file for subjects in set 1234 and Preparing methylation data}
+
+library(tidyverse)
+setwd("~/mQTL")
+
+genoSubs1 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set1.fam") %>%
+  dplyr::select(V1,V2)
+genoSubs2 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set2.fam") %>%
+  dplyr::select(V1,V2)
+genoSubs3 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.fam") %>%
+  dplyr::select(V1,V2)
+genoSubs4 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.fam") %>%
+  dplyr::select(V1,V2)
+
+# Set 1
+set1Meth <- read_rds("~/sets/set1/beta_ritu_imputed_set1.rds")
+set1Clin <- read.csv("~/sets/set1/clinical_variables.csv")
+Set1MSubs <- intersect(as.character(colnames(set1Meth)),set1Clin$beadPosition)
+Set1MethSub <- set1Clin %>%
+  dplyr::filter(beadPosition %in% Set1MSubs) %>%
+  dplyr::select(beadPosition,subjectId, race)
+
+Set1MethSubeur <- Set1MethSub %>%
+  filter(race == 1)
+Set1MethSublat <- Set1MethSub %>%
+  filter(race == 3)
+Set1EurSubs <- intersect(as.numeric(genoSubs1$V2),as.numeric(Set1MethSubeur$subjectId) )
+Set1EurSubsID <- data.frame(FID=0, IID=Set1EurSubs)
+
+Set1EurSubsDF <- left_join(Set1EurSubsID, Set1MethSubeur, by = c("IID" = "subjectId"))  %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set1EurSubsID, "Subs.set1.EUR.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+Set1LatSubs <- intersect(as.numeric(genoSubs1$V2),as.numeric(Set1MethSublat$subjectId) )
+Set1LatSubsID <- data.frame(FID=0, IID=Set1LatSubs)
+Set1LatSubsDF <- left_join(Set1LatSubsID, Set1MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set1LatSubsID, "Subs.set1.LAT.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+# Set 2
+set2Meth <- read_rds("~/sets/set2/beta_ritu_imputed_set2.rds")
+set2Clin <- read.csv("~/sets/set2/clinical_variables.csv")
+Set2MSubs <- intersect(as.character(colnames(set2Meth)),set2Clin$beadPosition)
+Set2MethSub <- set2Clin %>%
+  dplyr::filter(beadPosition %in% Set2MSubs) %>%
+  dplyr::select(beadPosition,subjectId, race)
+
+Set2MethSubeur <- Set2MethSub %>%
+  filter(race == 1)
+Set2MethSublat <- Set2MethSub %>%
+  filter(race == 3)
+Set2EurSubs <- intersect(as.numeric(genoSubs2$V2),as.numeric(Set2MethSubeur$subjectId) )
+Set2EurSubsID <- data.frame(FID=0, IID=Set2EurSubs)
+Set2EurSubsDF <- left_join(Set2EurSubsID, Set2MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set2EurSubsID, "Subs.set2.EUR.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+Set2LatSubs <- intersect(as.numeric(genoSubs2$V2),as.numeric(Set2MethSublat$subjectId) )
+Set2LatSubsID <- data.frame(FID=0, IID=Set2LatSubs)
+Set2LatSubsDF <- left_join(Set2LatSubsID, Set2MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set2LatSubsID, "Subs.set2.LAT.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+# Set 3
+set3Meth <- read_rds("~/sets/set3/beta_ritu_imputed_set3.rds")
+set3Clin <- read.csv("~/sets/set3/clinical_variables.csv") 
+
+Set3MSubs <- intersect(as.character(colnames(set3Meth)),set3Clin$beadPosition)
+Set3MethSub <- set3Clin %>%
+  dplyr::filter(beadPosition %in% Set3MSubs) %>%
+  dplyr::select(beadPosition,subjectId, race)
+
+Set3MethSubeur <- Set3MethSub %>%
+  filter(race == 1)
+Set3MethSublat <- Set3MethSub %>%
+  filter(race == 3)
+Set3EurSubs <- intersect(as.numeric(genoSubs3$V2),as.numeric(Set3MethSubeur$subjectId) )
+Set3EurSubsID <- data.frame(FID=0, IID=Set3EurSubs)
+Set3EurSubsDF <- left_join(Set3EurSubsID, Set3MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set3EurSubsID, "Subs.set3.EUR.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+Set3LatSubs <- intersect(as.numeric(genoSubs3$V2),as.numeric(Set3MethSublat$subjectId) )
+Set3LatSubsID <- data.frame(FID=0, IID=Set3LatSubs)
+Set3LatSubsDF <- left_join(Set3LatSubsID, Set3MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set3LatSubsID, "Subs.set3.LAT.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+
+# Set 4
+DS_ID <- c("159630", "159651", "159659", "159670", "160794", "160795", "160809", "160812", "160858", "161026", "161048", "162357", "162408", "163817") 
+set4Meth <- read_rds("~/sets/set4/beta_funnorm_bmiq_imputed_set4.rds")
+set4Clin <- read.csv("~/sets/set4/clinical_variables.csv") %>% 
+  filter(!subjectId %in% DS_ID) %>%
+  filter(smp_type=="bg") %>% distinct(subjectId, .keep_all = TRUE)
+Set4MSubs <- intersect(as.character(colnames(set4Meth)),set4Clin$beadPosition)
+Set4MethSub <- set4Clin %>%
+  dplyr::filter(beadPosition %in% Set4MSubs) %>%
+  dplyr::select(beadPosition,subjectId, race)
+
+Set4MethSubeur <- Set4MethSub %>%
+  filter(race == 1)
+Set4MethSublat <- Set4MethSub %>%
+  filter(race == 3)
+Set4EurSubs <- intersect(as.numeric(genoSubs4$V2),as.numeric(Set4MethSubeur$subjectId) )
+Set4EurSubsID <- data.frame(FID=0, IID=Set4EurSubs)
+Set4EurSubsDF <- left_join(Set4EurSubsID, Set4MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set4EurSubsID, "Subs.set4.EUR.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+Set4LatSubs <- intersect(as.numeric(genoSubs4$V2),as.numeric(Set4MethSublat$subjectId) )
+Set4LatSubsID <- data.frame(FID=0, IID=Set4LatSubs)
+Set4LatSubsDF <- left_join(Set4LatSubsID, Set4MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+write.table(Set4LatSubsID, "Subs.set4.LAT.txt",sep="\t",quote=FALSE,row.names = FALSE, col.names = FALSE)
+
+
+# phenotype data: DNA methylation in BED file
+anno = fread("liftover.methy/hg38.450k.anno.txt") %>%
+  as.data.frame() %>%
+  mutate(V7=V2) %>%
+  dplyr::select(V1,V2,V7,V4,V5,V6,-V3)
+colnames(anno) <- c("chr","start","end","pid","gid","strand")
+rownames(anno) <- anno$pid
+
+annoEPIC = fread("liftover.methy/hg38.EPIC.anno.txt") %>%
+  as.data.frame() %>%
+  mutate(V7=V2) %>%
+  dplyr::select(V1,V2,V7,V4,V5,V6,-V3)
+colnames(annoEPIC) <- c("chr","start","end","pid","gid","strand")
+rownames(annoEPIC) <- annoEPIC$pid
+
+## Loading methylation data for Set1  Set2, Set3 and Set4
+set1P <- inner_join(anno,set1Meth,by=c("pid" = "probeId"))
+set1P_Eur <- set1P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set1EurSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr)) 
+colnames(set1P_Eur) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set1EurSubsDF$vcfID))
+
+set1P_Lat <- set1P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set1LatSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr)) 
+colnames(set1P_Lat) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set1LatSubsDF$vcfID))
+
+write.table(set1P_Eur, "set1.EUR.bed",sep="\t",quote=FALSE,row.names = FALSE)
+write.table(set1P_Lat, "set1.LAT.bed",sep="\t",quote=FALSE,row.names = FALSE)
+
+set2P <- inner_join(anno,set2Meth,by=c("pid" = "probeId"))
+set2P_Eur <- set2P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set2EurSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr))
+colnames(set2P_Eur) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set2EurSubsDF$vcfID))
+
+set2P_Lat <- set2P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set2LatSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr)) 
+colnames(set2P_Lat) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set2LatSubsDF$vcfID))
+
+write.table(set2P_Eur, "set2.EUR.bed",sep="\t",quote=FALSE,row.names = FALSE)
+write.table(set2P_Lat, "set2.LAT.bed",sep="\t",quote=FALSE,row.names = FALSE)
+
+set3P <- inner_join(annoEPIC,set3Meth,by=c("pid" = "probeId"))
+set3P_Eur <- set3P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set3EurSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr)) 
+colnames(set3P_Eur) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set3EurSubsDF$vcfID))
+
+set3P_Lat <- set3P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set3LatSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr))
+colnames(set3P_Lat) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set3LatSubsDF$vcfID))
+
+write.table(set3P_Eur, "set3.EUR.bed",sep="\t",quote=FALSE,row.names = FALSE)
+write.table(set3P_Lat, "set3.LAT.bed",sep="\t",quote=FALSE,row.names = FALSE)
+
+set4P <- inner_join(annoEPIC,set4Meth,by=c("pid" = "probeId"))
+set4P_Eur <- set4P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set4EurSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr)) 
+colnames(set4P_Eur) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set4EurSubsDF$vcfID))
+
+set4P_Lat <- set4P[,c("chr", "start", "end", "pid", "gid", "strand", as.character(Set4LatSubsDF$beadPosition))] %>%
+  dplyr::mutate(chr = gsub("chr","",chr))
+colnames(set4P_Lat) <- c("#Chr", "start", "end", "pid", "gid", "strand", as.character(Set4LatSubsDF$vcfID))
+
+write.table(set4P_Eur, "set4.EUR.bed",sep="\t",quote=FALSE,row.names = FALSE)
+write.table(set4P_Lat, "set4.LAT.bed",sep="\t",quote=FALSE,row.names = FALSE)
+```
+
+```{bash Preparing input files for qtlTools}
+
+# Preparing input files for qtlTools
+cd ~/mQTL
+
+## Preparing Genotype data (for set 1 and 2)
+for set in "set1" "set2"; do
+  for race in "EUR" "LAT" ; do
+      plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas."${set}" \
+        --keep Subs."${set}"."${race}".txt \
+        --recode vcf \
+        --out "${set}"."${race}"
+      bcftools sort --temp-dir /ccls/home/sli/mQTL/temp "${set}"."${race}".vcf -Oz -o "${set}"."${race}".vcf.gz
+      tabix "${set}"."${race}".vcf.gz
+  done
+done
+
+## Preparing Genotype data (for set 3 and 4)
+
+# harmonize set3 genetics data with set 4
+# bfile:
+#wc -l /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.bim
+# 9252461
+
+# bfile: 
+#wc -l /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.bim
+# 9451342
+
+cp /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.??? .
+
+Rscript /ccls/home/sli/GWAS/libby/codes/refGenome.r /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.bim ccls.gwas.set3.bim
+
+### select SNPs that have opposite ref/alt alleles
+### firstbfile.ref.genome will be written automatically for downstream use, IN THE SAME DIRECTORY AS REFERENCE PLINK FILE, so next step will be
+plink --bfile ccls.gwas.set3\
+  --reference-allele /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.ref.genome\
+  --make-bed\
+  --out ccls.gwas.set3.flipped
+
+awk '{print $2}' /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.bim > set4.snps
+
+plink --bfile ccls.gwas.set3.flipped\
+  --extract set4.snps\
+  --make-bed\
+  --out set3.harmonized
+# 8974195 variants and 562 people pass filters and QC.
+
+awk '{print $2}' set3.harmonized.bim > set3.snps
+
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4\
+  --extract set3.snps\
+  --make-bed\
+  --out set4.harmonized
+
+for set in "set3" "set4" ; do
+  for race in "EUR" "LAT" ; do
+    plink --bfile "${set}".harmonized\
+      --keep Subs."${set}"."${race}".txt\
+      --recode vcf\
+      --out "${set}"."${race}"
+    bcftools sort "${set}"."${race}".vcf -Oz -o "${set}"."${race}".vcf.gz
+    tabix -f "${set}"."${race}".vcf.gz
+  done
+done
+
+
+## Preparing Phenotype data (methylation, for set 1,2,3,4) 
+cd ~/mQTL
+
+for set in "set1" "set2" "set3" "set4"  ; do
+  for race in "EUR" "LAT" ; do
+    head -1 "${set}"."${race}".bed > "${set}"."${race}".sorted.bed
+    sort -k1,1 -k2,2n "${set}"."${race}".bed >> "${set}"."${race}".sorted.bed
+    bgzip -f "${set}"."${race}".sorted.bed
+    tabix -p bed "${set}"."${race}".sorted.bed.gz
+  done
+done
+
+## Calculating PCA information for samples (for sets 1,2,3,4)
+cd ~/mQTL
+
+for set in "set1" "set2" "set3" "set4"  ; do
+  for race in "EUR" "LAT" ; do
+  plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas."${set}"\
+    --keep Subs."${set}"."${race}".txt \
+    --make-bed \
+    --out "${set}"."${race}".pca
+  plink2 --bfile "${set}"."${race}".pca\
+    --maf 0.1 \
+    --indep-pairwise 50 10 0.1 \
+    --out "${set}"."${race}".pca.pruned
+  plink2 --bfile "${set}"."${race}".pca \
+    --extract "${set}"."${race}".pca.pruned.prune.in \
+    --pca 10 \
+    --out "${set}"."${race}".pca.cov \
+    --threads 200
+  done
+done
+
+# PCs, for pure ewas by set, not considering ancestry
+for set in "set1" "set2" "set3" "set4"  ; do
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas."${set}"\
+  --maf 0.1 \
+  --indep-pairwise 50 10 0.1 \
+  --out "${set}".pca.pruned
+plink2 --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas."${set}"\
+  --extract "${set}".pca.pruned.prune.in \
+  --pca 10\
+  --out ccls."${set}".pc\
+  --threads 200
+done
+
+
+# prepare  dumm files, for EWAS
+cd ~/mQTL
+for set in "set1" "set2"; do
+  # Preparing Genotype data
+  for chr in {1..22}; do
+    plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.$set\
+      --chr $chr \
+      --recodeA \
+      --out dumm/ccls.$set.chr$chr.dum
+  done
+done
+
+for set in "set3" "set4"; do
+  for chr in {1..22}; do
+   plink --bfile "${set}".harmonized\
+      --chr $chr \
+      --recodeA \
+      --out dumm/ccls.$set.chr$chr.dum
+  done    
+done
+
+## Calculating MAF information for all SNPs (for sets 1,2,3,4)
+cd /ccls/home/sli/mQTL
+
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.me.gwas \
+  --bmerge ~/mQTL/set3.harmonized \
+  --make-bed \
+  --out all.sets.for.maf
+
+plink --bfile all.sets.for.maf \
+	--freq \
+	--out all.set.maf
+# all.set.maf.frq	
+```
+
+```{r Covariate data sets 1234}
+library(tidyverse)
+setwd("~/mQTL")
+
+{
+genoSubs1 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set1.fam") %>%
+  select(V1,V2)
+genoSubs2 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set2.fam") %>%
+  select(V1,V2)
+genoSubs3 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set3.fam") %>%
+  select(V1,V2)
+genoSubs4 <- read.table("/ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set4.fam") %>%
+  select(V1,V2)
+
+set1Meth <- read_rds("~/sets/set1/beta_ritu_imputed_set1.rds")
+set1Clin <- read.csv("~/sets/set1/clinical_variables.csv") 
+Set1MSubs <- intersect(as.character(colnames(set1Meth)),set1Clin$beadPosition)
+Set1MethSub <- set1Clin %>%
+  dplyr::filter(beadPosition %in% Set1MSubs) %>%
+  dplyr::select(beadPosition,subjectId, sex, Batch, CaCo, race)
+Set1MethSubeur <- Set1MethSub %>%
+  filter(race == 1)
+Set1MethSublat <- Set1MethSub %>%
+  filter(race == 3)
+Set1EurSubs <- intersect(as.numeric(genoSubs1$V2),as.numeric(Set1MethSubeur$subjectId) )
+Set1EurSubsID <- data.frame(FID=0, IID=Set1EurSubs)
+Set1EurSubsDF <- left_join(Set1EurSubsID, Set1MethSubeur, by = c("IID" = "subjectId"))  %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+Set1LatSubs <- intersect(as.numeric(genoSubs1$V2),as.numeric(Set1MethSublat$subjectId) )
+Set1LatSubsID <- data.frame(FID=0, IID=Set1LatSubs)
+Set1LatSubsDF <- left_join(Set1LatSubsID, Set1MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+
+set2Meth <- read_rds("~/sets/set2/beta_ritu_imputed_set2.rds")
+set2Clin <- read.csv("~/sets/set2/clinical_variables.csv")
+Set2MSubs <- intersect(as.character(colnames(set2Meth)),set2Clin$beadPosition)
+Set2MethSub <- set2Clin %>%
+  dplyr::filter(beadPosition %in% Set2MSubs) %>%
+  dplyr::select(beadPosition,subjectId, sex, Batch, CaCo, race)
+Set2MethSubeur <- Set2MethSub %>%
+  filter(race == 1)
+Set2MethSublat <- Set2MethSub %>%
+  filter(race == 3)
+Set2EurSubs <- intersect(as.numeric(genoSubs2$V2),as.numeric(Set2MethSubeur$subjectId) )
+Set2EurSubsID <- data.frame(FID=0, IID=Set2EurSubs)
+Set2EurSubsDF <- left_join(Set2EurSubsID, Set2MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+Set2LatSubs <- intersect(as.numeric(genoSubs2$V2),as.numeric(Set2MethSublat$subjectId) )
+Set2LatSubsID <- data.frame(FID=0, IID=Set2LatSubs)
+Set2LatSubsDF <- left_join(Set2LatSubsID, Set2MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+
+set3Meth <- read_rds("~/sets/set3/beta_ritu_imputed_set3.rds")
+set3Clin <- read.csv("~/sets/set3/clinical_variables.csv") 
+
+Set3MSubs <- intersect(as.character(colnames(set3Meth)),set3Clin$beadPosition)
+Set3MethSub <- set3Clin %>%
+  dplyr::filter(beadPosition %in% Set3MSubs) %>%
+  dplyr::select(beadPosition,subjectId, sex, Batch, CaCo, race)
+Set3MethSubeur <- Set3MethSub %>%
+  filter(race == 1)
+Set3MethSublat <- Set3MethSub %>%
+  filter(race == 3)
+Set3EurSubs <- intersect(as.numeric(genoSubs3$V2),as.numeric(Set3MethSubeur$subjectId) )
+Set3EurSubsID <- data.frame(FID=0, IID=Set3EurSubs)
+Set3EurSubsDF <- left_join(Set3EurSubsID, Set3MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+Set3LatSubs <- intersect(as.numeric(genoSubs3$V2),as.numeric(Set3MethSublat$subjectId) )
+Set3LatSubsID <- data.frame(FID=0, IID=Set3LatSubs)
+Set3LatSubsDF <- left_join(Set3LatSubsID, Set3MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+
+DS_ID <- c("159630", "159651", "159659", "159670", "160794", "160795", "160809", "160812", "160858", "161026", "161048", "162357", "162408", "163817") 
+set4Meth <- read_rds("~/sets/set4/beta_funnorm_bmiq_imputed_set4.rds")
+set4Clin <- read.csv("~/sets/set4/clinical_variables.csv") %>% 
+  filter(!subjectId %in% DS_ID) %>%
+  filter(smp_type=="bg") %>% distinct(subjectId, .keep_all = TRUE) 
+Set4MSubs <- intersect(as.character(colnames(set4Meth)),set4Clin$beadPosition)
+Set4MethSub <- set4Clin %>%
+  dplyr::filter(beadPosition %in% Set4MSubs) %>%
+  dplyr::select(beadPosition,subjectId, sex, Batch, CaCo, race)
+Set4MethSubeur <- Set4MethSub %>%
+  filter(race == 1)
+Set4MethSublat <- Set4MethSub %>%
+  filter(race == 3)
+Set4EurSubs <- intersect(as.numeric(genoSubs4$V2),as.numeric(Set4MethSubeur$subjectId) )
+Set4EurSubsID <- data.frame(FID=0, IID=Set4EurSubs)
+Set4EurSubsDF <- left_join(Set4EurSubsID, Set4MethSubeur, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+Set4LatSubs <- intersect(as.numeric(genoSubs4$V2),as.numeric(Set4MethSublat$subjectId) )
+Set4LatSubsID <- data.frame(FID=0, IID=Set4LatSubs)
+Set4LatSubsDF <- left_join(Set4LatSubsID, Set4MethSublat, by = c("IID" = "subjectId")) %>%
+  mutate(vcfID = paste0(FID,"_",IID))
+}
+
+# Covariate data: sex, Batch, 5 ancestry PCs
+eig <- read.table("set1.EUR.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET1EurCov <- Set1EurSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET1EurCov_1 <- SET1EurCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET1EurCov_1, "set1.EUR.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set1.LAT.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET1LatCov <- Set1LatSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET1LatCov_1 <- SET1LatCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET1LatCov_1, "set1.LAT.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set2.EUR.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET2EurCov <- Set2EurSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET2EurCov_1 <- SET2EurCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET2EurCov_1, "set2.EUR.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set2.LAT.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET2LatCov <- Set2LatSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET2LatCov_1 <- SET2LatCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET2LatCov_1, "set2.LAT.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set3.EUR.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  dplyr::select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET3EurCov <- Set3EurSubsDF %>% 
+  dplyr::select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET3EurCov_1 <- SET3EurCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  dplyr::select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET3EurCov_1, "set3.EUR.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set3.LAT.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  dplyr::select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET3LatCov <- Set3LatSubsDF %>% 
+  dplyr::select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET3LatCov_1 <- SET3LatCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  dplyr::select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET3LatCov_1, "set3.LAT.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set4.EUR.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET4EurCov <- Set4EurSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET4EurCov_1 <- SET4EurCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET4EurCov_1, "set4.EUR.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+eig <- read.table("set4.LAT.pca.cov.eigenvec") %>%
+  as.data.frame() %>%
+  select(V1,V2,V3,V4,V5,V6,V7)
+colnames(eig) <- c("FID","IID","PC1","PC2","PC3","PC4","PC5")
+SET4LatCov <- Set4LatSubsDF %>% 
+  select(FID,IID, sex, Batch) %>%
+  left_join(eig, by = c("FID","IID"))
+SET4LatCov_1 <- SET4LatCov %>% 
+  mutate(sex= as.factor(sex), Batch=as.factor(Batch)) %>%
+  mutate(vcfID = paste0(FID,"_",IID)) %>%
+  column_to_rownames(var="vcfID") %>%
+  select(sex, Batch,PC1,PC2,PC3,PC4,PC5) %>%
+  t() %>%
+  as.data.frame %>%
+  rownames_to_column(var="id")
+write.table(SET4LatCov_1, "set4.LAT.cov",sep="\t",quote=FALSE,row.names = FALSE)
+
+
+```
+
+```{r number of subjects per set (for paper)}
+
+library(tidyverse)
+library(data.table)
+setwd("~/mQTL")
+
+for(set in c("set1","set2","set3","set4")){
+  for(race in c("EUR","LAT")){
+    #set="set1"
+    #race="EUR"
+    fileR = fread(paste0(set,".",race,".cov"))
+    num = dim(fileR)[2]-1
+    print(paste0(set," ",race,", number of subjects is ",num))
+    print(table(fileR[1,-1] %>% t))
+  }
+}
+
+#[1] "set1 EUR, number of subjects is 168"
+#  1   2 
+#101  67 
+#[1] "set1 LAT, number of subjects is 174"
+# 1  2 
+#97 77 
+#[1] "set2 EUR, number of subjects is 105"
+# 1  2 
+#69 36 
+#[1] "set2 LAT, number of subjects is 220"
+#  1   2 
+#119 101 
+#[1] "set3 EUR, number of subjects is 159"
+# 1  2 
+#92 67 
+#[1] "set3 LAT, number of subjects is 316"
+#  1   2 
+#177 139 
+#[1] "set4 EUR, number of subjects is 137"
+# 1  2 
+#80 57 
+#[1] "set4 LAT, number of subjects is 356"
+#  1   2 
+#201 155 
+
+# 168+174+105+220+159+316+137+356=1635
+```
+
+cd ~/mQTL
+
+sbatch codes/mqtl_set1_LAT_2.sh
+sbatch codes/mqtl_set1_LAT_3.sh
+sbatch codes/mqtl_set1_LAT_5.sh
+sbatch codes/mqtl_set1_eur_2.sh
+sbatch codes/mqtl_set1_eur_3.sh
+sbatch codes/mqtl_set1_eur_4.sh
+sbatch codes/mqtl_set1_eur_5.sh
+sbatch codes/mqtl_set2_EUR_2.sh
+sbatch codes/mqtl_set2_EUR_3.sh
+sbatch codes/mqtl_set2_EUR_4.sh
+sbatch codes/mqtl_set2_EUR_5.sh
+sbatch codes/mqtl_set2_LAT_2.sh
+sbatch codes/mqtl_set2_LAT_3.sh
+sbatch codes/mqtl_set2_LAT_3_1.sh
+sbatch codes/mqtl_set2_LAT_5.sh
+sbatch codes/mqtl_set3_EUR_1.sh
+sbatch codes/mqtl_set3_EUR_1_1.sh
+sbatch codes/mqtl_set3_EUR_2.sh
+sbatch codes/mqtl_set3_EUR_2_1.sh
+sbatch codes/mqtl_set3_EUR_3.sh
+sbatch codes/mqtl_set3_EUR_3_1.sh
+sbatch codes/mqtl_set3_EUR_4.sh
+sbatch codes/mqtl_set3_EUR_4_1.sh
+sbatch codes/mqtl_set3_EUR_5.sh
+sbatch codes/mqtl_set3_EUR_5_1.sh
+sbatch codes/mqtl_set3_LAT_1.sh
+sbatch codes/mqtl_set3_LAT_1_1.sh
+sbatch codes/mqtl_set3_LAT_2.sh
+sbatch codes/mqtl_set3_LAT_2_1.sh
+sbatch codes/mqtl_set3_LAT_3.sh
+sbatch codes/mqtl_set3_LAT_3_1.sh
+sbatch codes/mqtl_set3_LAT_4.sh
+sbatch codes/mqtl_set3_LAT_4_1.sh
+sbatch codes/mqtl_set3_LAT_5.sh
+sbatch codes/mqtl_set3_LAT_5_1.sh
+sbatch codes/mqtl_set4_EUR_1.sh
+sbatch codes/mqtl_set4_EUR_1_1.sh
+sbatch codes/mqtl_set4_EUR_2.sh
+sbatch codes/mqtl_set4_EUR_2_1.sh
+sbatch codes/mqtl_set4_EUR_3.sh
+sbatch codes/mqtl_set4_EUR_3_1.sh
+sbatch codes/mqtl_set4_EUR_4.sh
+sbatch codes/mqtl_set4_EUR_4_1.sh
+sbatch codes/mqtl_set4_EUR_5.sh
+sbatch codes/mqtl_set4_EUR_5_1.sh
+sbatch codes/mqtl_set4_LAT_1.sh
+sbatch codes/mqtl_set4_LAT_1_1.sh
+sbatch codes/mqtl_set4_LAT_2.sh
+sbatch codes/mqtl_set4_LAT_2_1.sh
+sbatch codes/mqtl_set4_LAT_3.sh
+sbatch codes/mqtl_set4_LAT_3_1.sh
+sbatch codes/mqtl_set4_LAT_4.sh
+sbatch codes/mqtl_set4_LAT_4_1.sh
+sbatch codes/mqtl_set4_LAT_5.sh
+sbatch codes/mqtl_set4_LAT_5_1.sh
+sbatch codes/mqtl_set1_LAT_4.sh
+sbatch codes/mqtl_set2_LAT_4.sh
+sbatch codes/mqtl_set1_LAT_1.sh
+sbatch codes/mqtl_set1_eur_1.sh
+sbatch codes/mqtl_set2_EUR_1.sh
+sbatch codes/mqtl_set2_LAT_1.sh
+
+```{bash Discover QTL in cis (permutation pass)}
+# Discover QTL in cis (permutation pass)
+## --permute integer
+## Adjust the best nominal p-value for this phenotype accounting for the number of variants and the linkage disequilibrium 
+## in its cis-window. We recommend at least 1000 permutation for the final analysis, 
+## and in most cases you will see diminishing returns when going over 5000. 
+## However, if you are doing exploratory analyses like which/how many covariates to include, you can go as low as 100. 
+## Mutually exclusive with --nominal and --mapping. RECOMMENDED=1000.
+cd ~/mQTL
+
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    for j in $(seq 0 100); do
+      QTLtools cis --vcf "${set}"."${race}".vcf.gz \
+       --bed "${set}"."${race}".sorted.bed.gz \
+       --cov "${set}"."${race}".cov \
+       --permute 1000 \
+       --chunk $j 100 \
+       --normal \
+       --seed 123456 \
+       --std-err \
+       --out permute_1000/permute."${set}"."${race}".mqtl."${j}"_of_100.txt
+    done
+  done
+done
+
+
+cd ~/mQTL
+
+# Combining results of all the output files
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    cat permute_1000/permute."${set}"."${race}".mqtl.*_of_100.txt |\
+      awk '{if(NR==1)
+              print $0;
+            else if($21<0.05)
+              print $0}'>\
+      permute.k."${set}"."${race}".mqtl.txt
+  done
+done
+
+# create an ID for identification, create a column for sample size
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    N=$(wc -l Subs."${set}"."${race}".txt | awk '{print $1}')
+    awk '{print $1"-"$8, $0}' permute.k."${set}"."${race}".mqtl.txt |\
+    awk -v var=$N '{print $0, var}' |
+    awk 'NR==1{$1="ID" ; $NF="N"};1'>\
+    "${set}"."${race}".mqtl.k.txt
+  done
+done
+```
+
+# meta-analysis by platform
+
+```{bash downstream processing of output files}
+# meta-analysis by platform
+
+cd ~/mQTL
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set1.EUR.mqtl.k.txt
+PROCESS set2.EUR.mqtl.k.txt
+PROCESS set1.LAT.mqtl.k.txt
+PROCESS set2.LAT.mqtl.k.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.k.450K.txt
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set3.EUR.mqtl.k.txt
+PROCESS set4.EUR.mqtl.k.txt
+PROCESS set3.LAT.mqtl.k.txt
+PROCESS set4.LAT.mqtl.k.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.k.EPIC.txt
+
+# all datasets
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set1.EUR.mqtl.k.txt
+PROCESS set2.EUR.mqtl.k.txt
+PROCESS set1.LAT.mqtl.k.txt
+PROCESS set2.LAT.mqtl.k.txt
+PROCESS set3.EUR.mqtl.k.txt
+PROCESS set4.EUR.mqtl.k.txt
+PROCESS set3.LAT.mqtl.k.txt
+PROCESS set4.LAT.mqtl.k.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.k.ALL.txt
+
+# sorting the files arranged by 1. CpG 2. P values
+
+#export LC_NUMERIC=en_US
+paste \
+  <(awk '{gsub(/-.*$/,"",$1); print $1}' mqtl.k.450K.txt| tail -n +2 ) \
+  <(awk '{gsub(/.*-/,"",$1); print $1}' mqtl.k.450K.txt| tail -n +2 ) \
+  <(awk '{print $1,$2,$3,$4,$5}' mqtl.k.450K.txt | tail -n +2 ) \
+  | sed '1i CpG SNP MarkerName  Effect  StdErr  P-value Direction' \
+  > mqtl.k.450K.scfl.0
+  head -1 mqtl.k.450K.scfl.0 > mqtl.k.450K.scfl
+  sort -k1,1 -k6,6g <(tail -n +2 mqtl.k.450K.scfl.0) >> mqtl.k.450K.scfl
+
+paste \
+  <(awk '{gsub(/-.*$/,"",$1); print $1}' mqtl.k.EPIC.txt| tail -n +2 ) \
+  <(awk '{gsub(/.*-/,"",$1); print $1}' mqtl.k.EPIC.txt| tail -n +2 ) \
+  <(awk '{print $1,$2,$3,$4,$5}' mqtl.k.EPIC.txt | tail -n +2 ) \
+  | sed '1i CpG SNP MarkerName  Effect  StdErr  P-value Direction' \
+  > mqtl.k.EPIC.scfl.0
+  head -1 mqtl.k.EPIC.scfl.0 > mqtl.k.EPIC.scfl
+  sort -k1,1 -k6,6g <(tail -n +2 mqtl.k.EPIC.scfl.0) >> mqtl.k.EPIC.scfl
+
+paste \
+  <(awk '{gsub(/-.*$/,"",$1); print $1}' mqtl.k.ALL.txt| tail -n +2 ) \
+  <(awk '{gsub(/.*-/,"",$1); print $1}' mqtl.k.ALL.txt| tail -n +2 ) \
+  <(awk '{print $1,$2,$3,$4,$5}' mqtl.k.ALL.txt | tail -n +2 ) \
+  | sed '1i CpG SNP MarkerName  Effect  StdErr  P-value Direction' \
+  > mqtl.k.ALL.scfl.0
+  head -1 mqtl.k.ALL.scfl.0 > mqtl.k.ALL.scfl
+  sort -k1,1 -k6,6g <(tail -n +2 mqtl.k.ALL.scfl.0) >> mqtl.k.ALL.scfl
+  
+awk '{print $2, $1, $6}' mqtl.k.450K.scfl > mqtl.k.450K.sim 
+awk '{print $2, $1, $6}' mqtl.k.EPIC.scfl > mqtl.k.EPIC.sim
+awk '{print $2, $1, $6}' mqtl.k.ALL.scfl > mqtl.k.ALL.sim
+
+```
+
+# meta-analysis by ethnicity
+
+comparison of the regression coefficients of mQTLs between Latinos and Europeans (perhaps from meta-analysis within each population)
+
+```{bash }
+
+cd ~/mQTL
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set1.EUR.mqtl.k.txt
+PROCESS set2.EUR.mqtl.k.txt
+PROCESS set3.EUR.mqtl.k.txt
+PROCESS set4.EUR.mqtl.k.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.k.eur.txt
+
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set1.LAT.mqtl.k.txt
+PROCESS set2.LAT.mqtl.k.txt
+PROCESS set3.LAT.mqtl.k.txt
+PROCESS set4.LAT.mqtl.k.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.k.lat.txt
+
+```
+
+```{r comparison of the regression coefficients of mQTLs between Latinos and Europeans}
+
+setwd("~/mQTL")
+library(tidyverse)
+library(data.table)
+
+eur.res = fread("mqtl.k.eur.txt") %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(as.numeric(`P-value`))) %>%
+  dplyr::select(MarkerName,Effect,logP) %>%
+  dplyr::rename("Effect_eur"="Effect",
+                "logP_eur" = "logP")
+
+lat.res = fread("mqtl.k.lat.txt") %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(as.numeric(`P-value`))) %>%
+  dplyr::select(MarkerName,Effect,logP) %>%
+  dplyr::rename("Effect_lat"="Effect",
+                "logP_lat" = "logP")
+
+# scatter plot for each cpg-mqtl pair
+com.res = inner_join(eur.res,lat.res,by="MarkerName")
+
+# all SNPs
+com.res %>%
+  ggplot(aes(x=abs(Effect_eur),y=abs(Effect_lat)))+
+  geom_point(alpha = 1/5,color='turquoise',shape=4)+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.2,color="red")+
+  geom_hline(aes(yintercept=0),color="red",alpha=0.4)+
+  geom_vline(aes(xintercept=0),color="red",alpha=0.4)+
+  xlab("NLW mQTL absolute effect sizes") + 
+  ylab("LAT mQTL absolute effect sizes") + 
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14),
+          plot.margin=unit(c(5.5, 19, 5.5, 5.5), "points"))
+ggsave("compare.eur.lat.effect.size.png",width = 8,height = 6)
+
+com.res %>%
+  ggplot(aes(x=abs(logP_eur),y=abs(logP_lat)))+
+  geom_point(alpha = 1/5,color='turquoise',shape=4)+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.2,color="red")+
+  geom_hline(aes(yintercept=0),color="red",alpha=0.4)+
+  geom_vline(aes(xintercept=0),color="red",alpha=0.4)+
+  xlab("NLW mQTL log P values") + 
+  ylab("LAT mQTL log P values") + 
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14),
+          plot.margin=unit(c(5.5, 19, 5.5, 5.5), "points"))
+ggsave("compare.eur.lat.log.p.png",width = 8,height = 6)
+
+# boxplot for each ancestry
+# eur.res.box = fread("mqtl.k.eur.txt") %>%
+#   as.data.frame() %>%
+#   mutate(logP = -log10(as.numeric(`P-value`)),
+#          cohort="NLW") %>%
+#   dplyr::select(cohort,Effect,logP) 
+# 
+# lat.res.box = fread("mqtl.k.lat.txt") %>%
+#   as.data.frame() %>%
+#   mutate(logP = -log10(as.numeric(`P-value`)),
+#          cohort="LAT") %>%
+#   dplyr::select(cohort,Effect,logP) 
+# 
+# all.res.box = rbind(eur.res.box,lat.res.box) %>%
+#   as.data.frame()
+# 
+# ggplot(all.res.box, aes(x=cohort, y=Effect, fill=as.factor(cohort))) +
+#   geom_boxplot(outlier.size=0.2)+
+#   theme_classic() +
+#   xlab("Ancestry") +
+#   ylab("Effect Sizes") +
+#   theme(plot.title = element_text(hjust = 0.5)) +
+#   scale_fill_discrete(name="Ancestry",labels=c("LAT","NLW"))
+
+# having MAF cut-off
+# Figure S1
+
+maf = fread("all.set.maf.frq") %>%
+  dplyr::select(SNP,MAF)
+com.res.maf = com.res %>%
+  separate(MarkerName,c("cpg","SNP"),sep='-') %>%
+  inner_join(maf,by='SNP') %>%
+  mutate(maf_group=ifelse(MAF<0.05,"0.01-0.05",
+                                 ifelse(MAF<0.1,'0.05-0.1','>0.1')))
+  
+com.res.maf %>%
+  arrange(desc(MAF)) %>% 
+  ggplot(aes(x=abs(Effect_eur),y=abs(Effect_lat)))+
+  geom_point(aes(color=maf_group),alpha = 0.2, shape=4)+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.2,color="red")+
+  geom_hline(aes(yintercept=0),color="red",alpha=0.4)+
+  geom_vline(aes(xintercept=0),color="red",alpha=0.4)+
+  xlab("NLW mQTL absolute effect sizes") + 
+  ylab("LAT mQTL absolute effect sizes") + 
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        axis.title.x = element_text(size=14),
+        axis.title.y = element_text(size=14),
+        plot.margin=unit(c(5.5, 19, 5.5, 5.5), "points"))+
+  scale_color_manual(values=c("grey", "#F8766D", "turquoise"),name="MAF Group")+
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+ggsave("compare.maf.eur.lat.effect.size.png",width = 8,height = 6)
+
+
+com.res.maf %>%
+  arrange(desc(MAF)) %>% 
+  ggplot(aes(x=abs(logP_eur),y=abs(logP_lat),color=maf_group))+
+  geom_point(alpha = 0.2, shape=4)+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.2,color="red")+
+  geom_hline(aes(yintercept=0),color="red",alpha=0.4)+
+  geom_vline(aes(xintercept=0),color="red",alpha=0.4)+
+  xlab("NLW mQTL −log10 (P-value)") + 
+  ylab("LAT mQTL −log10 (P-value)") + 
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14),
+          plot.margin=unit(c(5.5, 19, 5.5, 5.5), "points"))+
+  scale_color_manual(values=c("grey", "#F8766D", "turquoise"),name="MAF Group")+
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+ggsave("compare.maf.eur.lat.log.p.png",width = 8,height = 6)
+
+```
+
+>> figure 1, number of common CpGs
+
+investigating LDs of different SNPs in sets 1,2 and sets 3,4
+
+```{bash}
+
+cd ~/mQTL/ldtest
+# combining genetic datasets, sets 1,2 and sets 3,4
+plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set1\
+  --bmerge /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set2\
+  --make-bed\
+  --out 450k.gene
+
+plink --bfile ~/mQTL/set3.harmonized\
+  --bmerge ~/mQTL/set4.harmonized\
+  --make-bed\
+  --out epic.gene
+
+# combining all genetic datasets together
+plink --bfile 450k.gene\
+  --bmerge epic.gene\
+  --make-bed\
+  --out all.gene
+
+```
+
+```{r creating a list of all SNPs involved, as well as combining cpg-snp pairs together cross datasets}
+
+setwd("~/mQTL")
+library(data.table)
+library(tidyverse)
+
+eur1 = fread("set1.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat1 = fread("set1.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+eur2 = fread("set2.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat2 = fread("set2.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+
+all.SNPs = c(eur1$var_id,
+             lat1$var_id,
+             eur2$var_id,
+             lat2$var_id) %>% 
+  unique() %>%
+  as.data.frame()
+
+
+write.table(all.SNPs,"~/mQTL/ldtest/450k.all.SNPs.txt",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote=FALSE,
+            sep='\t')
+
+
+eur3 = fread("set3.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat3 = fread("set3.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+eur4 = fread("set4.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat4 = fread("set4.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+
+all.SNPs.epic = c(eur3$var_id,
+             lat3$var_id,
+             eur4$var_id,
+             lat4$var_id) %>% 
+  unique() %>%
+  as.data.frame()
+
+
+write.table(all.SNPs.epic,"~/mQTL/ldtest/epic.all.SNPs.txt",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote=FALSE,
+            sep='\t')
+
+
+setwd("/ccls/home/sli/mQTL/ldtest")
+library(data.table)
+library(tidyverse)
+
+eur1 = fread("/ccls/home/sli/mQTL/set1.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat1 = fread("/ccls/home/sli/mQTL/set1.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+eur2 = fread("/ccls/home/sli/mQTL/set2.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat2 = fread("/ccls/home/sli/mQTL/set2.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+eur3 = fread("/ccls/home/sli/mQTL/set3.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat3 = fread("/ccls/home/sli/mQTL/set3.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+eur4 = fread("/ccls/home/sli/mQTL/set4.EUR.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+lat4 = fread("/ccls/home/sli/mQTL/set4.LAT.mqtl.k.txt",header=TRUE) %>%
+  dplyr::select(phe_id,var_id,nom_pval)
+
+eur1.eur2 = eur1 %>%
+  inner_join(eur2,by="phe_id") 
+  write.table(eur1.eur2,"eur1.eur2.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+lat1.lat2 = lat1 %>%
+  inner_join(lat2,by="phe_id") 
+  write.table(lat1.lat2,"lat1.lat2.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+eur1.lat1 = eur1 %>%
+  inner_join(lat1,by="phe_id") 
+  write.table(eur1.lat1,"eur1.lat1.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+eur2.lat2 = eur2 %>%
+  inner_join(lat2,by="phe_id") 
+  write.table(eur2.lat2,"eur2.lat2.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+    
+eur3.eur4 = eur3 %>%
+  inner_join(eur4,by="phe_id") 
+  write.table(eur3.eur4,"eur3.eur4.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+lat3.lat4 = lat3 %>%
+  inner_join(lat4,by="phe_id") 
+  write.table(lat3.lat4,"lat3.lat4.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+eur3.lat3 = eur3 %>%
+  inner_join(lat3,by="phe_id") 
+  write.table(eur3.lat3,"eur3.lat3.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+
+eur4.lat4 = eur4 %>%
+  inner_join(lat4,by="phe_id") 
+  write.table(eur4.lat4,"eur4.lat4.txt",
+              sep="\t",
+              row.names = FALSE,
+              col.names = FALSE,
+              quote = FALSE)
+    
+```
+
+```{bash}
+
+cd ~/mQTL/ldtest
+
+#ssh n0001
+cd /tmp/sli
+cp ~/mQTL/ldtest/450k.gene.??? .
+cp ~/mQTL/ldtest/epic.gene.??? .
+cp ~/mQTL/ldtest/450k.all.SNPs.txt .
+cp ~/mQTL/ldtest/epic.all.SNPs.txt .
+cp ~/mQTL/ldtest/eur1.eur2.txt .
+cp ~/mQTL/ldtest/lat1.lat2.txt .
+cp ~/mQTL/ldtest/eur1.lat1.txt .
+cp ~/mQTL/ldtest/eur2.lat2.txt .
+cp ~/mQTL/ldtest/eur3.eur4.txt .
+cp ~/mQTL/ldtest/lat3.lat4.txt .
+cp ~/mQTL/ldtest/eur3.lat3.txt .
+cp ~/mQTL/ldtest/eur4.lat4.txt .
+
+for chr in {1..22}; do
+  plink --bfile 450k.gene\
+    --extract 450k.all.SNPs.txt\
+    --chr $chr\
+    --make-bed\
+    --out 450k.gene.chr$chr
+done    
+
+for chr in {1..22}; do
+  plink --bfile epic.gene\
+   --extract epic.all.SNPs.txt\
+    --chr $chr\
+    --make-bed\
+    --out epic.gene.chr$chr
+done    
+  
+for chr in {1..22}; do
+
+  plink --r2 --bfile 450k.gene.chr$chr\
+    --ld-snp-list 450k.all.SNPs.txt\
+    --ld-window 99999\
+    --ld-window-kb 2000\
+    --ld-window-r2 0\
+    --out 450k.snps.chr$chr
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur1.eur2.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<450k.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur1.eur2.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<lat1.lat2.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<450k.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > lat1.lat2.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur1.lat1.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<450k.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur1.lat1.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur2.lat2.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<450k.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur2.lat2.ldStat.chr$chr.txt
+
+  plink --r2 --bfile epic.gene.chr$chr\
+    --ld-snp-list epic.all.SNPs.txt\
+    --ld-window 99999\
+    --ld-window-kb 2000\
+    --ld-window-r2 0\
+    --out epic.snps.chr$chr
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur3.eur4.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<epic.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur3.eur4.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<lat3.lat4.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<epic.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > lat3.lat4.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur3.lat3.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<epic.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur3.lat3.ldStat.chr$chr.txt
+
+  join -j1 -o1.2,1.3,1.4,1.5,1.6,2.8\
+    <(<eur4.lat4.txt awk '{print $2"-"$4" "$0}' | sort -k1,1) \
+    <(<epic.snps.chr$chr.ld awk '{print $3"-"$6" "$0}' | sort -k1,1) > eur4.lat4.ldStat.chr$chr.txt
+    
+  #cp eur1.eur2.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp lat1.lat2.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp eur1.lat1.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp eur2.lat2.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp eur3.eur4.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp lat3.lat4.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp eur3.lat3.ldStat.chr$chr.txt ~/mQTL/ldtest
+  #cp eur4.lat4.ldStat.chr$chr.txt ~/mQTL/ldtest
+
+  rm -rf 450k.snps.chr$chr.ld
+  rm -rf epic.snps.chr$chr.ld
+  
+done
+
+# combining all the results together
+
+cd ~/mQTL/ldtest
+
+cat eur1.eur2.ldStat.chr*.txt > eur1.eur2.ldStat.txt
+cat lat1.lat2.ldStat.chr*.txt > lat1.lat2.ldStat.txt
+cat eur1.lat1.ldStat.chr*.txt > eur1.lat1.ldStat.txt
+cat eur2.lat2.ldStat.chr*.txt > eur2.lat2.ldStat.txt
+cat eur3.eur4.ldStat.chr*.txt > eur3.eur4.ldStat.txt
+cat lat3.lat4.ldStat.chr*.txt > lat3.lat4.ldStat.txt
+cat eur3.lat3.ldStat.chr*.txt > eur3.lat3.ldStat.txt
+cat eur4.lat4.ldStat.chr*.txt > eur4.lat4.ldStat.txt
+
+#sanity check
+#chr=14
+#grep "chr14:99683165:C:A" eur1.eur2.ldStat.chr$chr.txt
+
+```
+
+Calculation of overlap between set1 and set2, set3 and set4; epic and 450k
+
+```{r calculation of overlap between set1 and set2, set3 and set4; epic and 450k}
+
+setwd("~/mQTL")
+library(data.table)
+library(tidyverse)
+library(VennDiagram)
+library(qvalue)
+
+################################################################
+# set 1 and 2
+setMeth <- read_rds("~/sets/set1/beta_ritu_imputed_set1.rds") %>%
+  filter(grepl("^cg",probeId)) %>%
+  dplyr::select(probeId)
+dim(setMeth)
+# set 1 has 480320 CpGs in total 
+eur1 <- read.table("set1.EUR.mqtl.k.txt",header=TRUE) %>% 
+  filter(grepl("^cg",ID))
+nrow(eur1)
+# 71703 CpGs have an mQTL
+lat1 <- read.table("set1.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat1)
+# 72662
+
+setMeth <- read_rds("~/sets/set2/beta_ritu_imputed_set2.rds") %>%
+  filter(grepl("^cg",probeId)) %>%
+  dplyr::select(probeId)
+dim(setMeth)
+# set 2 has 481473 CpGs in total 
+eur2 <- read.table("set2.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(eur2)
+# 64503
+lat2 <- read.table("set2.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat2)
+# 86375
+
+################################################################
+# set 3 and 4
+setMeth <- read_rds("~/sets/set3/beta_ritu_imputed_set3.rds") %>%
+  filter(grepl("^cg",probeId)) %>%
+  dplyr::select(probeId)
+dim(setMeth)
+# set 3 has 862204 CpGs in total 
+
+eur3 <- read.table("set3.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(eur3)
+# 177490
+lat3 <- read.table("set3.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat3)
+# 243637
+
+setMeth <- read_rds("~/sets/set4/beta_funnorm_bmiq_imputed_set4.rds") %>%
+  filter(grepl("^cg",probeId)) %>%
+  dplyr::select(probeId)
+dim(setMeth)
+# set 4 has 861343 CpGs in total 
+eur4 <- read.table("set4.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(eur4)
+# 149397
+lat4 <- read.table("set4.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat4)
+# 220747
+
+################################################################
+# sets 1 and 2 and 3 and 4 overlaps
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  filter(Methyl450_Loci=="TRUE") %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg)
+
+eur1 <- read.table("set1.EUR.mqtl.k.txt",header=TRUE) %>% 
+  filter(grepl("^cg",ID))
+nrow(eur1)
+# 71703 CpGs have an mQTL
+lat1 <- read.table("set1.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat1)
+# 72662
+
+eur2 <- read.table("set2.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(eur2)
+# 64503
+lat2 <- read.table("set2.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID))
+nrow(lat2)
+# 86375
+
+setMeth <- read_rds("~/sets/set3/beta_ritu_imputed_set3.rds") %>%
+  filter(grepl("^cg",probeId),
+         probeId %in% annoEPIC$cpg)
+nrow(setMeth)  
+# set 3 has 449159 450K CpGs in total 
+
+eur3 <- read.table("set3.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID),
+         phe_id %in% annoEPIC$cpg)
+nrow(eur3)
+# 91677
+
+lat3 <- read.table("set3.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID),
+         phe_id %in% annoEPIC$cpg)
+nrow(lat3)
+# 122885
+
+setMeth <- read_rds("~/sets/set4/beta_ritu_imputed_set4.rds") %>%
+  filter(grepl("^cg",probeId),
+         probeId %in% annoEPIC$cpg)
+nrow(setMeth)  
+# set 4 has 449521 450K CpGs in total 
+
+eur4 <- read.table("set4.EUR.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID),
+         phe_id %in% annoEPIC$cpg)
+nrow(eur4)
+# 78637
+lat4 <- read.table("set4.LAT.mqtl.k.txt",header=TRUE)%>%
+  filter(grepl("^cg",ID),
+         phe_id %in% annoEPIC$cpg)
+nrow(lat4)
+# 114068
+
+# for reviewer
+mqtlnums = data.frame(setN = rep(c("set1","set2","set3","set4"),each=2),
+                      race = rep(c("NLW","LAT"),4),
+                      totCpGs = rep(c(480320,481473,449159,449521),each=2),
+                      numCpGs = c(71703,72662,64503,86375,91677,122885,78637,114068)) %>%
+  mutate(percentCpGwmQTL = round(numCpGs/totCpGs,3))
+
+mqtlnums %>%
+  ggplot(aes(x=setN, y=100*percentCpGwmQTL, fill=race)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=13),
+      axis.text.y = element_text(size=13),
+      axis.title.x = element_text(size=15),
+      axis.title.y = element_text(size=15),
+      legend.text=element_text(size=13),
+      legend.title=element_text(size=15))+
+  scale_fill_discrete(name="Ethnicity",labels=c("Latino","Non-Latino Whites"))+
+  labs(x="Data Sets",y="Proportions of 450K available CpGs with mQTL (%)")
+ggsave("forReviewerAllCpGsproportionCpGwmQTL.png",width = 8,height = 6)
+
+################################################################
+###after BASH LDSTAT is done (written on March 6th)
+## number of common mQTLs across datasets (by 8 scenarios)
+for(scenario in c("eur1.eur2","lat1.lat2",
+                  "eur1.lat1","eur2.lat2",
+                  "eur3.eur4","lat3.lat4",
+                  "eur3.lat3","eur4.lat4")){
+  
+  all.pairs = fread(paste0("ldtest/",scenario,".txt"))
+  combined = fread(paste0("ldtest/",scenario,".ldStat.txt")) 
+  all.pairs.ld = all.pairs %>% 
+    left_join(combined,by=c("V1","V2","V3","V4","V5"))
+  colnames(all.pairs.ld) <- c("cpg","snpA","pA","snpB","pB","r2")
+  a1 = nrow(all.pairs.ld)
+  # 38096
+  a2 = all.pairs.ld %>% filter(snpA==snpB) %>% nrow()
+  # 12423
+  a3 = all.pairs.ld %>% filter((snpA!=snpB)&r2>0.5) %>% nrow()
+  # 16267
+  
+  cat(paste0("\n",
+             scenario, 
+             ": There are in total ",a1, " CpGs in common in these two datasets.\n",
+             a2," CpGs share the same SNPs\n",
+             a3, " CpGs share different SNPs but within 0.5 r2 LD\n"))
+}
+
+#eur1.eur2: There are in total 38055 CpGs in common in these two datasets.
+#12343 CpGs share the same SNPs
+#16376 CpGs share different SNPs but within 0.5 r2 LD
+#
+#lat1.lat2: There are in total 49139 CpGs in common in these two datasets.
+#15573 CpGs share the same SNPs
+#22685 CpGs share different SNPs but within 0.5 r2 LD
+#
+#eur1.lat1: There are in total 42505 CpGs in common in these two datasets.
+#12748 CpGs share the same SNPs
+#19318 CpGs share different SNPs but within 0.5 r2 LD
+#
+#eur2.lat2: There are in total 41775 CpGs in common in these two datasets.
+#12659 CpGs share the same SNPs
+#18367 CpGs share different SNPs but within 0.5 r2 LD
+#
+#eur3.eur4: There are in total 103191 CpGs in common in these two datasets.
+#34552 CpGs share the same SNPs
+#44825 CpGs share different SNPs but within 0.5 r2 LD
+#
+#lat3.lat4: There are in total 166602 CpGs in common in these two datasets.
+#54903 CpGs share the same SNPs
+#76866 CpGs share different SNPs but within 0.5 r2 LD
+#
+#eur3.lat3: There are in total 137227 CpGs in common in these two datasets.
+#42365 CpGs share the same SNPs
+#61552 CpGs share different SNPs but within 0.5 r2 LD
+#
+#eur4.lat4: There are in total 113139 CpGs in common in these two datasets.
+#35655 CpGs share the same SNPs
+#49956 CpGs share different SNPs but within 0.5 r2 LD
+
+###########################visualization
+# number of mqtls in each dataset
+mqtlnums = data.frame(setN = rep(c("set1","set2","set3","set4"),each=2),
+                      race = rep(c("NLW","LAT"),4),
+                      totCpGs = rep(c(480320,481473,862204,861343),each=2),
+                      numCpGs = c(71703,72662,64503,86375,177490,243637,149397,220747)) %>%
+  mutate(percentCpGwmQTL = round(numCpGs/totCpGs,3))
+
+#on averge, how much percentage of CpGs have mQTLs on 450K 
+#((71703+72662)/(480320*2) + (64503+86375)/(481473*2))/2 = 0.1534819
+#on averge, how much percentage of CpGs have mQTLs on EPIC 
+#((177490+243637)/(862204*2) + (149397+220747)/(861343*2))/2 = 0.2295399
+
+mqtlnums %>%
+  ggplot(aes(x=setN, y=100*percentCpGwmQTL, fill=race)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=13),
+      axis.text.y = element_text(size=13),
+      axis.title.x = element_text(size=15),
+      axis.title.y = element_text(size=15),
+      legend.text=element_text(size=13),
+      legend.title=element_text(size=15))+
+  scale_fill_discrete(name="Ethnicity",labels=c("Latino","Non-Latino Whites"))+
+  labs(x="Data Sets",y="Proportions of CpGs with mQTL (%)")
+ggsave("proportionCpGwmQTL.png",width = 8,height = 6)
+
+# pair-wise, number of overlapping mQTLs and LDs
+mqtlshares = data.frame(setsName = c("NLW1.NLW2","LAT1.LAT2",
+                  "NLW1.LAT1","NLW2.LAT2",
+                  "NLW3.NLW4","LAT3.LAT4",
+                  "NLW3.LAT3","NLW4.LAT4"),
+                  totalSharedCpG_n=c(38061,49120,42577,41843,103661,166944,137902,113306),
+                  sameSNP_n = c(12420,15599,12850,12706,34703,54946,42650,35676),
+                  ldSNP_n=c(16287,22718,19310,18345,45000,77045,61871,50003)) %>%
+  mutate(tot_same_ld_n = sameSNP_n+ldSNP_n,
+         sameSNP_prop = sameSNP_n/totalSharedCpG_n,
+         ldSNP_prop = ldSNP_n/totalSharedCpG_n,
+         tot_same_ld_prop = tot_same_ld_n/totalSharedCpG_n)
+mqtlshares$setsName <- factor(mqtlshares$setsName, levels = mqtlshares$setsName)
+
+write.csv(mqtlshares,"mqtlshares.csv")
+
+require(scales)
+mqtlshares %>%
+  gather(key=snp_type_n, value=number,c("sameSNP_n","ldSNP_n","tot_same_ld_n"))%>%
+  gather(key=snp_type_prop,
+         value=proportion,c("sameSNP_prop","ldSNP_prop","tot_same_ld_prop"))%>%
+  ggplot(aes(x=setsName, y=number, fill=snp_type_n)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12,angle = 20, vjust = 0.5,hjust=0.5),
+      axis.text.y = element_text(size=12),
+      axis.title.x = element_text(size=14),
+      axis.title.y = element_text(size=14),
+      legend.text=element_text(size=12),
+      legend.title=element_text(size=14))+
+  scale_y_continuous(labels = comma)+
+  scale_fill_discrete(name="Shared SNP types",labels=c("SNPs in LD","Identical SNPs","Both"))+
+  labs(x="Data sets compared",y="Number of SNPs")
+ggsave("sharedSNPsSetWise.png",width = 10,height = 6)
+
+
+# number of overlapping mQTLs across Sets
+venn.diagram(
+  x = list(eur1$ID,eur2$ID,lat1$ID,lat2$ID),
+  category.names = c("NLW.1" , "NLW.2", "LAT.1", "LAT.2"),
+  filename = 'mqtl.set12.k.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+venn.diagram(
+  x = list(eur3$ID,eur4$ID,lat3$ID,lat4$ID),
+  category.names = c("NLW.3" , "NLW.4", "LAT.3", "LAT.4"),
+  filename = 'mqtl.set34.k.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+###########################
+# 450k and epic
+
+p450k = read.table("mqtl.k.450K.scfl",header=TRUE) %>%
+  filter(grepl("^cg",MarkerName)) 
+
+nrow(p450k)
+#[1] 243450
+table(p450k$CpG)%>% dim
+#[1] 150333
+
+p450k$qvalue = qvalue(p450k$P.value)$qvalues
+p450kSig = p450k %>% 
+  filter(qvalue<0.05)
+nrow(p450kSig)
+# [1] 243450
+
+epic = read.table("mqtl.k.EPIC.scfl",header=TRUE)%>%
+  filter(grepl("^cg",MarkerName))
+nrow(epic)
+#[1] 630971
+table(epic$CpG)%>% dim
+#[1] 358325
+
+epic$qvalue = qvalue(epic$P.value)$qvalues
+epicSig = epic %>% 
+  filter(qvalue<0.05)
+nrow(epicSig)
+# [1] 630971
+
+intersect(p450k$CpG,epic$CpG) %>% unique() %>% length()
+# 92960
+p450kEpic = p450k %>%
+  inner_join(epic,by="MarkerName") 
+p450kEpic$CpG.x %>% unique() %>% length()
+# 43816
+
+# 43816/92960 = 47.13%
+
+venn.diagram(
+  x = list(p450k$MarkerName,epic$MarkerName),
+  category.names = c("450K" , "EPIC"),
+  filename = 'mqtl.platform.k.venn.png',
+  output=TRUE, 
+  fill = c("lightskyblue1","lightpink")
+)
+
+
+# 450k from all datasets
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="CpG") %>%
+  dplyr::select(CpG)
+
+p450k.all = read.table("mqtl.k.ALL.scfl",header=TRUE) %>%
+  filter(grepl("^cg",MarkerName)) %>%
+  filter(CpG %in% anno$CpG)
+
+nrow(p450k.all)
+#[1] 514684
+table(p450k.all$CpG)%>% dim
+#[1] 239245
+
+# 514684/ 239245
+#[1] 2.151284
+
+```
+
+
+# The locations of mQTLs
+
+```{r cpg-snp pairs by platform}
+
+setwd("~/mQTL")
+library(data.table)
+library(tidyverse)
+
+# 450K
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+         UCSC_RefGene_Group,Regulatory_Feature_Group) %>%
+  mutate(Regulatory_Feature_Group=ifelse(Regulatory_Feature_Group=="",
+                                         "none",Regulatory_Feature_Group),
+         Regulatory_Feature_Group = gsub("_Cell_type_specific","",Regulatory_Feature_Group)
+         )
+
+#pie( table(anno$Relation_to_Island) )
+
+allDat = table(anno$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "overall" = "Freq") %>%
+  mutate(overall_percent = overall/sum(overall)) 
+
+k450k = read.table("mqtl.k.450K.sim",header=TRUE) %>% 
+  filter(grepl("^cg",CpG)) %>%
+  inner_join(anno,by=c("CpG"="cpg")) %>%
+  arrange(`P.value`,CpG) %>%
+  distinct(CpG,.keep_all = TRUE) 
+
+#pie( table(k450k$Relation_to_Island) )
+
+mqtl450kDat = table(k450k$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "mqtl450k" = "Freq") %>%
+  mutate(mqtl450k_percent = mqtl450k/sum(mqtl450k)) %>%
+  inner_join(allDat,by="loc")
+
+mqtl450kDat %>%
+  gather(key=type, value=percentage,c("mqtl450k_percent","overall_percent"))%>%
+  ggplot(aes(x=loc, y=percentage, fill=type)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12,angle = 20, vjust = 0.5,hjust=0.5),
+      axis.text.y = element_text(size=12),
+      axis.title.x = element_text(size=14),
+      axis.title.y = element_text(size=14),
+      legend.text=element_text(size=12),
+      legend.title=element_text(size=14))+
+  scale_fill_discrete(name = "Types",labels=c("mQTL-matched CpGs","Genome-wide"))+
+  labs(x="Genomic locations",y="Proportions of CpGs")
+ggsave("dis.450K.sigcpgs.column.png",width = 10,height = 6)
+
+allDat_NS_shore = mqtl450kDat[mqtl450kDat$loc=="N_Shore","overall"] +  
+  mqtl450kDat[mqtl450kDat$loc=="S_Shore","overall"]
+allDat_not_NS_shore = sum(mqtl450kDat$overall)-allDat_NS_shore
+p450k_NS_shore = mqtl450kDat[mqtl450kDat$loc=="N_Shore","mqtl450k"] +  
+  mqtl450kDat[mqtl450kDat$loc=="S_Shore","mqtl450k"]
+p450k_not_NS_shore = sum(mqtl450kDat$overall)-p450k_NS_shore
+x_mat = data.frame(NS_shore=c(p450k_NS_shore,allDat_NS_shore),
+                   not_NS_shore=c(p450k_not_NS_shore,allDat_not_NS_shore))
+
+chisq.test(x_mat, correct=TRUE)
+# 	Pearson's Chi-squared test with Yates' continuity correction
+# 
+# data:  x_mat
+# X-squared = 41926, df = 1, p-value < 2.2e-16
+
+for(testItem in mqtl450kDat$loc){
+  allDat = mqtl450kDat[mqtl450kDat$loc==testItem,"overall"] 
+  allDat_not = sum(mqtl450kDat$overall)-allDat
+  p450k = mqtl450kDat[mqtl450kDat$loc==testItem,"mqtl450k"]
+  p450k_not = sum(mqtl450kDat$mqtl450k)-p450k
+  x_mat = data.frame(yes=c(p450k,allDat),
+                     no=c(p450k_not,allDat_not))
+  print(testItem)
+  print(chisq.test(x_mat, correct=TRUE)$p.value)
+  # res <- prop.test(x = c(x_mat[1,1],x_mat[2,1] ), n = c(sum(mqtl450kDat$mqtl450k), sum(mqtl450kDat$overall)))
+  # print(res$p.value)
+  
+  }
+
+
+# epic
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+         UCSC_RefGene_Group,Regulatory_Feature_Group,
+         DNase_Hypersensitivity_Evidence_Count,
+         OpenChromatin_Evidence_Count,
+         TFBS_Evidence_Count) %>%
+  mutate(Regulatory_Feature_Group=ifelse(Regulatory_Feature_Group=="",
+                                         "none",Regulatory_Feature_Group),
+         Regulatory_Feature_Group = gsub("_Cell_type_specific","",Regulatory_Feature_Group)
+         )
+
+#pie(table(annoEPIC$Relation_to_Island))
+
+allDat = table(annoEPIC$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "overall" = "Freq") %>%
+  mutate(overall_percent = overall/sum(overall)) 
+
+epic =  read.table("mqtl.k.EPIC.sim",header=TRUE) %>% 
+  filter(grepl("^cg",CpG)) %>%
+  inner_join(annoEPIC,by=c("CpG"="cpg")) %>%
+  arrange(`P.value`,CpG) %>%
+  distinct(CpG,.keep_all = TRUE) 
+
+mqtlEpicDat = table(epic$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "mqtlEpic" = "Freq") %>%
+  mutate(mqtlEpic_percent = mqtlEpic/sum(mqtlEpic)) %>%
+  inner_join(allDat,by="loc")
+
+mqtlEpicDat %>%
+  gather(key=type, value=percentage,c("mqtlEpic_percent","overall_percent"))%>%
+  ggplot(aes(x=loc, y=percentage, fill=type)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12,angle = 20, vjust = 0.5,hjust=0.5),
+      axis.text.y = element_text(size=12),
+      axis.title.x = element_text(size=14),
+      axis.title.y = element_text(size=14),
+      legend.text=element_text(size=12),
+      legend.title=element_text(size=14))+
+  scale_fill_discrete(name = "Types",labels=c("mQTL-matched CpGs","Genome-wide"))+
+  labs(x="Genomic locations",y="Proportions of CpGs")
+ggsave("dis.EPIC.sigcpgs.column.png",width = 10,height = 6)
+
+allDat_NS_shore = mqtlEpicDat[mqtlEpicDat$loc=="N_Shore","overall"] +  
+  mqtlEpicDat[mqtlEpicDat$loc=="S_Shore","overall"]
+allDat_not_NS_shore = sum(mqtlEpicDat$overall)-allDat_NS_shore
+Epic_NS_shore = mqtlEpicDat[mqtlEpicDat$loc=="N_Shore","mqtlEpic"] +  
+  mqtlEpicDat[mqtlEpicDat$loc=="S_Shore","mqtlEpic"]
+Epic_not_NS_shore = sum(mqtlEpicDat$overall)-Epic_NS_shore
+x_mat = data.frame(NS_shore=c(Epic_NS_shore,allDat_NS_shore),
+                   not_NS_shore=c(Epic_not_NS_shore,allDat_not_NS_shore))
+chisq.test(x_mat, correct=TRUE)
+# 	Pearson's Chi-squared test with Yates' continuity correction
+# 
+# data:  x_mat
+# X-squared = 36539, df = 1, p-value < 2.2e-16
+
+for(testItem in mqtlEpicDat$loc){
+  allDat = mqtlEpicDat[mqtlEpicDat$loc==testItem,"overall"] 
+  allDat_not = sum(mqtlEpicDat$overall)-allDat
+  pEPIC = mqtlEpicDat[mqtlEpicDat$loc==testItem,"mqtlEpic"]
+  pEPIC_not = sum(mqtlEpicDat$mqtlEpic)-pEPIC
+  x_mat = data.frame(yes=c(pEPIC,allDat),
+                     no=c(pEPIC_not,allDat_not))
+  print(testItem)
+  print(chisq.test(x_mat, correct=TRUE)$p.value)
+  # res <- prop.test(x = c(x_mat[1,1],x_mat[2,1] ), n = c(sum(mqtl450kDat$mqtl450k), sum(mqtl450kDat$overall)))
+  # print(res$p.value)
+  
+  }
+
+# all
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+         UCSC_RefGene_Group,Regulatory_Feature_Group,
+         DNase_Hypersensitivity_Evidence_Count,
+         OpenChromatin_Evidence_Count,
+         TFBS_Evidence_Count) %>%
+  mutate(Regulatory_Feature_Group=ifelse(Regulatory_Feature_Group=="",
+                                         "none",Regulatory_Feature_Group),
+         Regulatory_Feature_Group = gsub("_Cell_type_specific","",Regulatory_Feature_Group)
+         )
+annoALL = annoEPIC %>%
+  filter(cpg %in% anno$cpg)
+
+allDat = table(annoALL$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "overall" = "Freq") %>%
+  mutate(overall_percent = overall/sum(overall)) 
+
+all =  read.table("mqtl.k.ALL.sim",header=TRUE) %>% 
+  filter(grepl("^cg",CpG)) %>%
+  inner_join(annoALL,by=c("CpG"="cpg")) %>%
+  arrange(`P.value`,CpG) %>%
+  distinct(CpG,.keep_all = TRUE) 
+
+mqtlAllDat = table(all$Relation_to_Island) %>%
+  t %>% as.data.frame() %>% dplyr::select(-Var1) %>%
+  dplyr::rename("loc" = "Var2",
+                "mqtlAll" = "Freq") %>%
+  mutate(mqtlAll_percent = mqtlAll/sum(mqtlAll)) %>%
+  inner_join(allDat,by="loc")
+
+mqtlAllDat %>%
+  gather(key=type, value=percentage,c("mqtlAll_percent","overall_percent"))%>%
+  ggplot(aes(x=loc, y=percentage, fill=type)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=12,angle = 20, vjust = 0.5,hjust=0.5),
+      axis.text.y = element_text(size=12),
+      axis.title.x = element_text(size=14),
+      axis.title.y = element_text(size=14),
+      legend.text=element_text(size=12),
+      legend.title=element_text(size=14))+
+  scale_fill_discrete(name = "Types",labels=c("mQTL-matched CpGs","Genome-wide"))+
+  labs(x="Genomic locations",y="Proportions of CpGs")
+ggsave("dis.All.sigcpgs.column.png",width = 10,height = 6)
+
+allDat_NS_shore = mqtlAllDat[mqtlAllDat$loc=="N_Shore","overall"] +  
+  mqtlAllDat[mqtlAllDat$loc=="S_Shore","overall"]
+allDat_not_NS_shore = sum(mqtlAllDat$overall)-allDat_NS_shore
+All_NS_shore = mqtlAllDat[mqtlAllDat$loc=="N_Shore","mqtlEpic"] +  
+  mqtlAllDat[mqtlAllDat$loc=="S_Shore","mqtlAll"]
+All_not_NS_shore = sum(mqtlAllDat$overall)-All_NS_shore
+x_mat = data.frame(NS_shore=c(All_NS_shore,allDat_NS_shore),
+                   not_NS_shore=c(All_not_NS_shore,allDat_not_NS_shore))
+chisq.test(x_mat, correct=TRUE)
+# 	Pearson's Chi-squared test with Yates' continuity correction
+# 
+# data:  x_mat
+# X-squared = 130031, df = 1, p-value < 2.2e-16
+
+```
+
+Analysis of enrichment in promoters and regulatory regions 
+
+
+#enrichement analysis
+
+```{r}
+
+setwd("~/mQTL/enrichment")
+library(data.table)
+library(tidyverse)
+library(GenomicRanges)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="CpG") %>%
+  dplyr::select(CpG,chr,pos,Relation_to_Island,UCSC_RefGene_Name,UCSC_RefGene_Group,Probe_maf)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="CpG") %>%
+  dplyr::select(CpG,chr,pos,Relation_to_Island,UCSC_RefGene_Name,UCSC_RefGene_Group,Methyl450_Loci,Probe_maf)
+
+#annotate functions 
+geneRanges <-  function(db, column="ENTREZID"){
+    g <- genes(db, columns=column)
+    col <- mcols(g)[[column]]
+    genes <- granges(g)[rep(seq_along(g), elementLengths(col))]
+    mcols(genes)[[column]] <- as.character(unlist(col))
+    genes
+}
+
+splitColumnByOverlap <- function(query, subject, column="ENTREZID", ...){
+    olaps <- GenomicRanges::findOverlaps(query, subject, ...)
+    f1 <- factor(subjectHits(olaps),
+                 levels=seq_len(subjectLength(olaps)))
+    splitAsList(mcols(query)[[column]][queryHits(olaps)], f1)
+}
+
+betasAll <- anno%>%
+  dplyr::filter(chr!="chrX"&chr!="chrY")
+
+annoSub_GR <- GRanges(seqnames=betasAll[,"chr"],
+                     ranges=IRanges(start=betasAll[,"pos"], 
+                                    end=betasAll[,"pos"]),
+                     strand=Rle(rep("*",nrow(betasAll))),
+                     Name=betasAll[,"CpG"])
+
+ewas_cpgs_sig_450k <- fread("~/mQTL/mqtl.k.450K.sim") %>%
+  as.data.frame() %>%
+  dplyr::select(CpG) %>%
+  distinct(CpG,.keep_all=TRUE) %>%
+  left_join(anno,by="CpG")
+
+ewas_cpgs_GR_450k <- GRanges(seqnames=ewas_cpgs_sig_450k[,"chr"],
+                     ranges=IRanges(start=ewas_cpgs_sig_450k[,"pos"], 
+                                    end=ewas_cpgs_sig_450k[,"pos"]),
+                     strand=Rle(rep("*",nrow(ewas_cpgs_sig_450k))),
+                     Name=ewas_cpgs_sig_450k[,"CpG"])
+
+ewas_cpgs_sig_epic <- fread("~/mQTL/mqtl.k.EPIC.sim") %>%
+  as.data.frame() %>%
+  dplyr::select(CpG) %>%
+  distinct(CpG,.keep_all=TRUE) %>%
+  left_join(annoEPIC,by="CpG")
+
+ewas_cpgs_GR_epic <- GRanges(seqnames=ewas_cpgs_sig_epic[,"chr"],
+                     ranges=IRanges(start=ewas_cpgs_sig_epic[,"pos"], 
+                                    end=ewas_cpgs_sig_epic[,"pos"]),
+                     strand=Rle(rep("*",nrow(ewas_cpgs_sig_epic))),
+                     Name=ewas_cpgs_sig_epic[,"CpG"])
+
+################################
+## transcription factor
+
+#load chipseq
+
+## what is a good score cut-off
+# PMID: 27209209, 800
+
+#https://hgdownload.cse.ucsc.edu/goldenpath/hg19/encodeDCC/wgEncodeRegTfbsClustered/
+#https://hgdownload.cse.ucsc.edu/goldenpath/hg19/encodeDCC/wgEncodeRegTfbsClustered/wgEncodeRegTfbsClusteredV3.bed.gz
+
+chipsec <- read_tsv("source/wgEncodeRegTfbsClusteredV3.bed.gz",col_names=F)%>%
+  as.data.frame()
+names(chipsec) <- c("chr","start","end","name","score", "expCount","expNums", "expScores")
+
+chipsecData <- GRanges(seqnames=chipsec[,1],
+                     ranges=IRanges(start=chipsec[,2], end=chipsec[,3]),
+                     strand=Rle(rep("*",nrow(chipsec))),
+                     data=chipsec[,5], TF=chipsec[,4])
+
+TFs_cpg <-  splitColumnByOverlap( chipsecData,annoSub_GR, "TF")
+TFs_cpg@partitioning@NAMES <- betasAll$CpG
+TFs_cpg <- as.data.frame(TFs_cpg)
+
+counts_cpg <- TFs_cpg%>%
+  dplyr::count(value)%>%
+  dplyr::mutate(TF=value, N_cpg=n)%>%
+  dplyr::select(TF, N_cpg )
+
+for(platform in c("450k","epic")){
+  
+  if(platform=='450k') {
+    ewas_cpgs_GR = ewas_cpgs_GR_450k
+    ewas_cpgs_sig = ewas_cpgs_sig_450k
+  }
+  if(platform=='epic') {
+    ewas_cpgs_GR = ewas_cpgs_GR_epic 
+    ewas_cpgs_sig = ewas_cpgs_sig_epic
+  }  
+  
+
+  TFs_cpg_ewas <-  splitColumnByOverlap(chipsecData,ewas_cpgs_GR, "TF")
+  TFs_cpg_ewas@partitioning@NAMES <- ewas_cpgs_sig$cpg
+  TFs_cpg_ewas <- as.data.frame(TFs_cpg_ewas)
+  counts_cpg_ewas <- TFs_cpg_ewas%>%
+    dplyr::count(value)%>%
+    dplyr::mutate(TF=value, N_cpg_ewas=n)%>%
+    dplyr::select(TF, N_cpg_ewas )
+  
+  total_TF_ewas <- counts_cpg %>%
+    left_join(counts_cpg_ewas, by="TF")%>%
+    dplyr::mutate(total_cpg_ewas=nrow(ewas_cpgs_sig)-N_cpg_ewas, 
+                  total_cpg=nrow(betasAll)-N_cpg)%>%
+    dplyr::mutate(fraction_cpg_ewas=N_cpg_ewas/nrow(ewas_cpgs_sig),
+                  fraction_cpg_all=N_cpg/nrow(betasAll))%>%
+    dplyr::mutate(fold_enrichement=fraction_cpg_ewas/fraction_cpg_all)
+  
+  for (n in total_TF_ewas$TF){
+    
+    total_TF_dummy <- total_TF_ewas%>%
+      dplyr::filter(TF==n)
+    
+    matrix <- matrix(c(c(total_TF_dummy$N_cpg_ewas, total_TF_dummy$N_cpg),
+                       c(total_TF_dummy$total_cpg_ewas, total_TF_dummy$total_cpg)),
+                     nrow=2, byrow=T)
+    if(!is.na(total_TF_dummy$N_cpg_ewas)){
+      total_TF_ewas$p_value[total_TF_ewas$TF==n]  <- fisher.test(matrix)$p.value}
+    else{
+       total_TF_ewas$p_value[total_TF_ewas$TF==n] <- NA
+    }
+  }
+  
+  
+  write_rds(total_TF_ewas,paste0(platform,"_total_TF_ewas.rds"))
+  total_TF_ewas = read_rds(paste0(platform,"_total_TF_ewas.rds"))
+  
+  print(platform)
+  enriched = total_TF_ewas%>%
+    dplyr::filter(p_value<0.05) %>%
+    arrange(p_value)
+  print(enriched$TF)
+  print(table(enriched$fold_enrichement>1))
+
+}
+
+
+################################
+## histone modification markers
+## Histone modification data were downloaded for primary HSCs (cell line E035) from the Roadmap Epigenomics Mapping Consortium database
+# wget https://egg2.wustl.edu/roadmap/data/byFileType/peaks/consolidated/broadPeak/E035-H3K4me3.broadPeak.gz
+# wget https://egg2.wustl.edu/roadmap/data/byFileType/peaks/consolidated/broadPeak/E035-H3K27me3.broadPeak.gz
+
+#####
+#load histone (H3K4me3)
+histone <- read_tsv("source/E035-H3K4me3.broadPeak", col_names = F)%>%
+  as.data.frame() %>%
+  dplyr::select(X1, X2, X3, X5)
+names(histone) <- c("chr","start","end","score")
+histone$histone <- "histone_modifier"
+histoneData <- GRanges(seqnames=histone[,1],
+                     ranges=IRanges(start=histone[,2], end=histone[,3]),
+                     strand=Rle(rep("*",nrow(histone))),
+                     score=histone[,4], histone=histone[,5])
+histone_cpg <-  splitColumnByOverlap(histoneData,annoSub_GR, "histone")
+histone_cpg@partitioning@NAMES <- betasAll$CpG
+histone_cpg <- as.data.frame(histone_cpg)
+counts_cpg <- histone_cpg%>%
+  dplyr::count(value)%>%
+  dplyr::mutate(histone=value, N_cpg=n)%>%
+  dplyr::select(histone, N_cpg )
+
+for(platform in c("450k","epic")){
+  
+  if(platform=='450k') {
+    ewas_cpgs_GR = ewas_cpgs_GR_450k
+    ewas_cpgs_sig = ewas_cpgs_sig_450k
+  }
+  if(platform=='epic') {
+    ewas_cpgs_GR = ewas_cpgs_GR_epic 
+    ewas_cpgs_sig = ewas_cpgs_sig_epic
+  }  
+  
+  
+  histone_cpg_ewas <-  splitColumnByOverlap(histoneData,ewas_cpgs_GR, "histone")
+  histone_cpg_ewas@partitioning@NAMES <- ewas_cpgs_sig$cpg
+  histone_cpg_ewas <- as.data.frame(histone_cpg_ewas)
+  counts_cpg_ewas <- histone_cpg_ewas%>%
+    dplyr::count(value)%>%
+    dplyr::mutate(histone=value, N_cpg_ewas=n)%>%
+    dplyr::select(histone, N_cpg_ewas )
+  total_histone_ewas <- counts_cpg %>%
+    left_join(counts_cpg_ewas, by="histone")%>%
+    dplyr::mutate(total_cpg_ewas=nrow(ewas_cpgs_sig)-N_cpg_ewas, 
+                  total_cpg=nrow(betasAll)-N_cpg)%>%
+    dplyr::mutate(fraction_cpg_ewas=N_cpg_ewas/nrow(ewas_cpgs_sig),
+                  fraction_cpg_all=N_cpg/nrow(betasAll))%>%
+    dplyr::mutate(fold_enrichement=fraction_cpg_ewas/fraction_cpg_all)
+  for (n in total_histone_ewas$histone){
+    total_histone_dummy <- total_histone_ewas%>%
+      dplyr::filter(histone==n)
+    matrix <- matrix(c(c(total_histone_dummy$N_cpg_ewas, total_histone_dummy$N_cpg),
+                       c(total_histone_dummy$total_cpg_ewas, total_histone_dummy$total_cpg)),
+                     nrow=2, byrow=T)
+    if(!is.na(total_histone_dummy$N_cpg_ewas)){
+      total_histone_ewas$p_value[total_histone_ewas$histone==n]  <- fisher.test(matrix)$p.value}
+    else{
+       total_histone_ewas$p_value[total_histone_ewas$histone==n] <- NA
+    }
+  }
+  
+  write_rds(total_histone_ewas,paste0(platform,"_total_histone_H3K4me3_ewas.rds"))
+  total_histone_ewas = read_rds(paste0(platform,"_total_histone_H3K4me3_ewas.rds"))
+  print(platform)
+  print("H3K4me3")
+  print(total_histone_ewas)
+  
+}
+
+
+#####
+#load histone (H3K27me3)
+histone <- read_tsv("source/E035-H3K27me3.broadPeak", col_names = F)%>%
+  as.data.frame() %>%
+  dplyr::select(X1, X2, X3, X5)
+names(histone) <- c("chr","start","end","score")
+histone$histone <- "histone_modifier"
+histoneData <- GRanges(seqnames=histone[,1],
+                     ranges=IRanges(start=histone[,2], end=histone[,3]),
+                     strand=Rle(rep("*",nrow(histone))),
+                     score=histone[,4], histone=histone[,5])
+histone_cpg <-  splitColumnByOverlap(histoneData,annoSub_GR, "histone")
+histone_cpg@partitioning@NAMES <- betasAll$CpG
+histone_cpg <- as.data.frame(histone_cpg)
+counts_cpg <- histone_cpg%>%
+  dplyr::count(value)%>%
+  dplyr::mutate(histone=value, N_cpg=n)%>%
+  dplyr::select(histone, N_cpg )
+
+for(platform in c("450k","epic")){
+  
+  if(platform=='450k') {
+    ewas_cpgs_GR = ewas_cpgs_GR_450k
+    ewas_cpgs_sig = ewas_cpgs_sig_450k
+  }
+  if(platform=='epic') {
+    ewas_cpgs_GR = ewas_cpgs_GR_epic 
+    ewas_cpgs_sig = ewas_cpgs_sig_epic
+  }  
+  
+  
+  histone_cpg_ewas <-  splitColumnByOverlap(histoneData,ewas_cpgs_GR, "histone")
+  histone_cpg_ewas@partitioning@NAMES <- ewas_cpgs_sig$cpg
+  histone_cpg_ewas <- as.data.frame(histone_cpg_ewas)
+  counts_cpg_ewas <- histone_cpg_ewas%>%
+    dplyr::count(value)%>%
+    dplyr::mutate(histone=value, N_cpg_ewas=n)%>%
+    dplyr::select(histone, N_cpg_ewas )
+  total_histone_ewas <- counts_cpg %>%
+    left_join(counts_cpg_ewas, by="histone")%>%
+    dplyr::mutate(total_cpg_ewas=nrow(ewas_cpgs_sig)-N_cpg_ewas, 
+                  total_cpg=nrow(betasAll)-N_cpg)%>%
+    dplyr::mutate(fraction_cpg_ewas=N_cpg_ewas/nrow(ewas_cpgs_sig),
+                  fraction_cpg_all=N_cpg/nrow(betasAll))%>%
+    dplyr::mutate(fold_enrichement=fraction_cpg_ewas/fraction_cpg_all)
+  for (n in total_histone_ewas$histone){
+    total_histone_dummy <- total_histone_ewas%>%
+      dplyr::filter(histone==n)
+    matrix <- matrix(c(c(total_histone_dummy$N_cpg_ewas, total_histone_dummy$N_cpg),
+                       c(total_histone_dummy$total_cpg_ewas, total_histone_dummy$total_cpg)),
+                     nrow=2, byrow=T)
+    if(!is.na(total_histone_dummy$N_cpg_ewas)){
+      total_histone_ewas$p_value[total_histone_ewas$histone==n]  <- fisher.test(matrix)$p.value}
+    else{
+       total_histone_ewas$p_value[total_histone_ewas$histone==n] <- NA
+    }
+  }
+  write_rds(total_histone_ewas,paste0(platform,"_total_histone_H3K27me3_ewas.rds"))
+  total_histone_ewas = read_rds(paste0(platform,"_total_histone_H3K27me3_ewas.rds"))
+  print(platform)
+  print("H3K27me3")
+  print(total_histone_ewas)
+}  
+
+################################
+## DHS
+### wgEncodeRegDnaseClusteredV3.bed file
+# wget http://hgdownload.cse.ucsc.edu/goldenpath/hg19/encodeDCC/wgEncodeRegDnaseClustered/wgEncodeRegDnaseClusteredV3.bed.gz
+
+dnase <- read_tsv("source/wgEncodeRegDnaseClusteredV3.bed",col_names=F)%>%
+  as.data.frame()%>%
+  dplyr::select(X1,X2, X3)
+names(dnase) <- c("chrom","start","end")
+dnase$dnase <- "DNAse_hypersensitivity"
+
+dnaseData <-  GRanges(seqnames=dnase[,1],
+                     ranges=IRanges(start=dnase[,2], end=dnase[,3]),
+                     strand=Rle(rep("*",nrow(dnase))),
+                     dnase=dnase[,4])
+dnase_cpg <-  splitColumnByOverlap(dnaseData,annoSub_GR, "dnase")
+dnase_cpg@partitioning@NAMES <- betasAll$CpG
+dnase_cpg <- as.data.frame(dnase_cpg)
+counts_cpg <- dnase_cpg%>%
+  dplyr::count(value)%>%
+  dplyr::mutate(dnase=value, N_cpg=n)%>%
+  dplyr::select(dnase, N_cpg )
+
+for(platform in c("450k","epic")){
+  
+  if(platform=='450k') {
+    ewas_cpgs_GR = ewas_cpgs_GR_450k
+    ewas_cpgs_sig = ewas_cpgs_sig_450k
+  }
+  if(platform=='epic') {
+    ewas_cpgs_GR = ewas_cpgs_GR_epic 
+    ewas_cpgs_sig = ewas_cpgs_sig_epic
+  }  
+  
+  dnase_cpg_ewas <-  splitColumnByOverlap(dnaseData,ewas_cpgs_GR, "dnase")
+  dnase_cpg_ewas@partitioning@NAMES <- ewas_cpgs_sig$cpg
+  dnase_cpg_ewas <- as.data.frame(dnase_cpg_ewas)
+  counts_cpg_ewas <- dnase_cpg_ewas%>%
+    dplyr::count(value)%>%
+    dplyr::mutate(dnase=value, N_cpg_ewas=n)%>%
+    dplyr::select(dnase, N_cpg_ewas )
+  total_dnase_ewas <- counts_cpg %>%
+    left_join(counts_cpg_ewas, by="dnase")%>%
+    dplyr::mutate(total_cpg_ewas=nrow(ewas_cpgs_sig)-N_cpg_ewas, 
+                  total_cpg=nrow(betasAll)-N_cpg)%>%
+    dplyr::mutate(fraction_cpg_ewas=N_cpg_ewas/nrow(ewas_cpgs_sig),
+                  fraction_cpg_all=N_cpg/nrow(betasAll))%>%
+    dplyr::mutate(fold_enrichement=fraction_cpg_ewas/fraction_cpg_all)
+  for (n in total_dnase_ewas$dnase){
+    total_dnase_dummy <- total_dnase_ewas%>%
+      dplyr::filter(dnase==n)
+    matrix <- matrix(c(c(total_dnase_dummy$N_cpg_ewas, total_dnase_dummy$N_cpg),
+                       c(total_dnase_dummy$total_cpg_ewas, total_dnase_dummy$total_cpg)),
+                     nrow=2, byrow=T)
+    if(!is.na(total_dnase_dummy$N_cpg_ewas)){
+      total_dnase_ewas$p_value[total_dnase_ewas$dnase==n]  <- fisher.test(matrix)$p.value}
+    else{
+       total_dnase_ewas$p_value[total_dnase_ewas$dnase==n] <- NA
+    }
+  }
+  write_rds(total_dnase_ewas,paste0(platform,"_total_dnase_ewas.rds"))
+  total_dnase_ewas = read_rds(paste0(platform,"_total_dnase_ewas.rds"))
+  print(platform)
+  print(total_dnase_ewas)
+}
+
+
+################################
+## predicted enhancer regions
+# PMID: 24119843
+### previously identified enhancer regions for three HSC cell lines (BI_CD34_Primary_RO01536, BI_CD34_Primary_RO01480, and BI_CD34_Primary_RO01549)
+# cd ~/mQTL/enrichment/source/super_enhancer
+#wget https://www.cell.com/cms/10.1016/j.cell.2013.09.053/attachment/b942e350-5bbf-41e6-956a-95c3a4976f8a/mmc8.zip
+# grep 'chr' *bed > BI_CD34_Primary.bed
+
+enhancer <- fread("source/super_enhancer/BI_CD34_Primary.bed")%>%
+  as.data.frame()%>%
+  separate(V1,c('factor','chrom'),sep=':') %>%
+  mutate(start=V2,end=V3) %>%
+  dplyr::select(chrom,start, end) %>%
+  arrange(chrom,start,end)
+enhancer$enhancer <- "super_enhancer"
+
+enhancerData <-  GRanges(seqnames=enhancer[,1],
+                     ranges=IRanges(start=enhancer[,2], end=enhancer[,3]),
+                     strand=Rle(rep("*",nrow(enhancer))),
+                     enhancer=enhancer[,4])
+enhancer_cpg <-  splitColumnByOverlap(enhancerData,annoSub_GR, "enhancer")
+enhancer_cpg@partitioning@NAMES <- betasAll$CpG
+enhancer_cpg <- as.data.frame(enhancer_cpg)
+counts_cpg <- enhancer_cpg%>%
+  dplyr::count(value)%>%
+  dplyr::mutate(enhancer=value, N_cpg=n)%>%
+  dplyr::select(enhancer, N_cpg )
+
+for(platform in c("450k","epic")){
+  
+  if(platform=='450k') {
+    ewas_cpgs_GR = ewas_cpgs_GR_450k
+    ewas_cpgs_sig = ewas_cpgs_sig_450k
+  }
+  if(platform=='epic') {
+    ewas_cpgs_GR = ewas_cpgs_GR_epic 
+    ewas_cpgs_sig = ewas_cpgs_sig_epic
+  }  
+  
+  
+  enhancer_cpg_ewas <-  splitColumnByOverlap(enhancerData,ewas_cpgs_GR, "enhancer")
+  enhancer_cpg_ewas@partitioning@NAMES <- ewas_cpgs_sig$cpg
+  enhancer_cpg_ewas <- as.data.frame(enhancer_cpg_ewas)
+  counts_cpg_ewas <- enhancer_cpg_ewas%>%
+    dplyr::count(value)%>%
+    dplyr::mutate(enhancer=value, N_cpg_ewas=n)%>%
+    dplyr::select(enhancer, N_cpg_ewas )
+  total_enhancer_ewas <- counts_cpg %>%
+    left_join(counts_cpg_ewas, by="enhancer")%>%
+    dplyr::mutate(total_cpg_ewas=nrow(ewas_cpgs_sig)-N_cpg_ewas, 
+                  total_cpg=nrow(betasAll)-N_cpg)%>%
+    dplyr::mutate(fraction_cpg_ewas=N_cpg_ewas/nrow(ewas_cpgs_sig),
+                  fraction_cpg_all=N_cpg/nrow(betasAll))%>%
+    dplyr::mutate(fold_enrichement=fraction_cpg_ewas/fraction_cpg_all)
+  for (n in total_enhancer_ewas$enhancer){
+    total_enhancer_dummy <- total_enhancer_ewas%>%
+      dplyr::filter(enhancer==n)
+    matrix <- matrix(c(c(total_enhancer_dummy$N_cpg_ewas, total_enhancer_dummy$N_cpg),
+                       c(total_enhancer_dummy$total_cpg_ewas, total_enhancer_dummy$total_cpg)),
+                     nrow=2, byrow=T)
+    if(!is.na(total_enhancer_dummy$N_cpg_ewas)){
+      total_enhancer_ewas$p_value[total_enhancer_ewas$enhancer==n]  <- fisher.test(matrix)$p.value}
+    else{
+       total_enhancer_ewas$p_value[total_enhancer_ewas$enhancer==n] <- NA
+    }
+  }
+  write_rds(total_enhancer_ewas,paste0(platform,"_total_enhancer_ewas.rds"))
+  total_enhancer_ewas = read_rds(paste0(platform,"_total_enhancer_ewas.rds"))
+  
+  print(platform)
+  print(total_enhancer_ewas)
+
+}
+
+```
+
+
+# preparing generic data for later EWAS analysis
+
+```{bash preparing generic data}
+
+#ssh sli@n0002
+#mkdir /tmp/sli
+#cd /tmp/sli
+
+cd /ccls/home/sli/mQTL
+
+#scp -v /ccls/home/sli/mQTL/dumm/ccls.set[1-4].chr*.dum.raw .
+#scp -v /ccls/home/sli/mQTL/mqtl.k.450K.sim .
+#scp -v /ccls/home/sli/mQTL/mqtl.k.EPIC.sim .
+#scp -v /ccls/home/sli/mQTL/mqtl.k.ALL.sim .
+
+for set in 1 2 3 4; do
+#for set in 3 4;do
+  # Exclude PAT MAT SEX PHENOTYPE columns
+  for chr in {1..22}; do
+    paste <(awk '{print $1"_"$2}' dumm/ccls.set$set.chr$chr.dum.raw | sed 's/FID_IID/snpid/') \
+      <(cut -d' ' -f7- dumm/ccls.set$set.chr$chr.dum.raw) \
+      > ccls.set$set.chr$chr.dum.int
+  done
+  
+  # Use -W to treat one or more consecutive whitespace characters as field delimiters
+  for chr in {1..22}; do
+    datamash -W transpose <ccls.set$set.chr$chr.dum.int |\
+      grep -v 'NA' > ccls.set$set.chr$chr.dum.tsp
+  done
+done
+
+rm -rf ccls.set?.chr*.dum.int*
+
+# Combining all dummy genotype data into 1 dataframe
+for set in 1 2 3 4; do
+#for set in 3 4;do
+  head -1 ccls.set$set.chr1.dum.tsp > ccls.set$set.dum.tsp
+  tail -n +2 -q ccls.set$set.chr*.dum.tsp >> ccls.set$set.dum.tsp
+done
+
+rm -rf ccls.set?.chr*.dum*
+
+# Changing the name of SNPs to make it concordant with mqtl file
+for set in 1 2 3 4; do
+#for set in 3 4;do
+  awk '{gsub(/_.*$/,"",$1); print $0}' ccls.set$set.dum.tsp > ccls.set$set.dum.tsp.nm
+done
+
+# choose SNPs that are available in that particular dataset
+# then choose unique SNPs with the lowest P value in mQTL scanning
+for set in 1 2; do
+  join -1 1 -2 1 <(sort -k1,1 mqtl.k.450K.sim)\
+      <(sort -k1,1 ccls.set$set.dum.tsp.nm) |\
+      sort -k2,2 -k3,3g |\
+      sort -u -k2,2 \
+      > ccls.set$set.mqtls
+  hdr=$(echo -n  $(head -1 mqtl.k.450K.sim) $(head -1 ccls.set$set.dum.tsp.nm) | sed 's/snpid//g') 
+  cat <(echo $hdr) ccls.set$set.mqtls > ccls.set$set.mqtls.hd
+done
+
+for set in 3 4; do
+  join -1 1 -2 1 <(sort -k1,1 mqtl.k.EPIC.sim)\
+      <(sort -k1,1 ccls.set$set.dum.tsp.nm) |\
+      sort -k2,2 -k3,3g |\
+      sort -u -k2,2 \
+      > ccls.set$set.mqtls
+  hdr=$(echo -n  $(head -1 mqtl.k.EPIC.sim) $(head -1 ccls.set$set.dum.tsp.nm) | sed 's/snpid//g') 
+  cat <(echo $hdr) ccls.set$set.mqtls > ccls.set$set.mqtls.hd
+done
+
+#cp ccls.set1.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set2.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set3.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set4.mqtls.hd /ccls/home/sli/mQTL
+
+# for all datasets
+for set in 1 2 3 4; do
+  for chr in {1..22}; do
+    paste <(awk '{print $1"_"$2}' dumm/ccls.set$set.chr$chr.dum.raw | sed 's/FID_IID/snpid/') \
+      <(cut -d' ' -f7- dumm/ccls.set$set.chr$chr.dum.raw) \
+      > ccls.set$set.chr$chr.dum.int
+  done
+  
+  # Use -W to treat one or more consecutive whitespace characters as field delimiters
+  for chr in {1..22}; do
+    datamash -W transpose <ccls.set$set.chr$chr.dum.int |\
+      grep -v 'NA' > ccls.set$set.chr$chr.dum.tsp
+  done
+done
+
+rm -rf ccls.set?.chr*.dum.int*
+
+# Combining all dummy genotype data into 1 dataframe
+for set in 1 2 3 4; do
+#for set in 3 4;do
+  head -1 ccls.set$set.chr1.dum.tsp > ccls.set$set.dum.tsp
+  tail -n +2 -q ccls.set$set.chr*.dum.tsp >> ccls.set$set.dum.tsp
+done
+
+rm -rf ccls.set?.chr*.dum*
+
+# Changing the name of SNPs to make it concordant with mqtl file
+for set in 1 2 3 4; do
+#for set in 3 4;do
+  awk '{gsub(/_.*$/,"",$1); print $0}' ccls.set$set.dum.tsp > ccls.set$set.dum.tsp.nm
+done
+
+# choose SNPs that are available in that particular dataset
+# then choose unique SNPs with the lowest P value in mQTL scanning
+for set in 1 2 3 4; do
+  join -1 1 -2 1 <(sort -k1,1 mqtl.k.ALL.sim)\
+      <(sort -k1,1 ccls.set$set.dum.tsp.nm) |\
+      sort -k2,2 -k3,3g |\
+      sort -u -k2,2 \
+      > ccls.set$set.all.mqtls
+  hdr=$(echo -n  $(head -1 mqtl.k.ALL.sim) $(head -1 ccls.set$set.dum.tsp.nm) | sed 's/snpid//g') 
+  cat <(echo $hdr) ccls.set$set.all.mqtls > ccls.set$set.all.mqtls.hd
+done
+
+#cp ccls.set1.all.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set2.all.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set3.all.mqtls.hd /ccls/home/sli/mQTL
+#cp ccls.set4.all.mqtls.hd /ccls/home/sli/mQTL
+
+```
+
+
+#Try replicating cis and trans mQTL effects from published data
+
+analysis of variance (ANOVA, sometimes called "marker regression") at the marker loci
+calculate a t-statistic (or  F-statistic) to compare the averages of the two marker genotype groups
+
+DOI: https://doi.org/10.1038/s41588-021-00923-x
+
+>> trans mQTL
+
+```{bash selecting transQTLs in include}
+
+cd ~/mQTL/godmc
+
+awk -v FS=, -v OFS="\t" '$11=="FALSE" {print $1,$2,$3,$4,$5}' assoc_meta_all.csv |\
+  grep -v "INDEL" |\
+  sed 's/"//g' |\
+  sed 's/:SNP//g'  > trans.all.mqtl.txt
+
+# lifover from hg19 to hg38
+
+awk '{print $2}' trans.all.mqtl.txt |\
+  awk -v FS=: -v OFS="\t" '{print $1, ($2-1), $2, FNR}' > trans.all.mqtl.hg19.bed
+
+liftOver trans.all.mqtl.hg19.bed\
+  /ccls/home/sli/dependencies/liftOver/hg19ToHg38.over.chain\
+   trans.all.mqtl.hg38.bed\
+   trans.all.mqtl.unlifted.bed
+
+cat <(awk '{print $1,$3,$4}' trans.all.mqtl.hg38.bed) \
+  <(grep -v "#" trans.all.mqtl.unlifted.bed | awk '{print "NA","NA",$4}') |\
+  sort -k3,3n > trans.all.mqtl.hg38.coor
+
+paste trans.all.mqtl.txt trans.all.mqtl.hg38.coor |\
+  awk '{print $1,$6,$7,$3,$4,$5}' > trans.hg38.mqtl.txt
+sed -i '1i cpg  snp_chr snp_pos beta_a1 se  pval' trans.hg38.mqtl.txt
+
+tail -n +2 trans.hg38.mqtl.txt | sort -k1,1 -k6,6g  | sort -u -k1,1  > trans.top.hg38.mqtl.txt
+sed -i '1i cpg  snp_chr snp_pos beta_a1 se  pval' trans.top.hg38.mqtl.txt
+
+awk '{print $2,$3,$3,FNR}' trans.top.hg38.mqtl.txt | tail -n +2 > trans.top.hg38.mqtl.range
+
+# choosing genetic files from that trans.top.hg38.mqtl.txt
+for set in 1 2 3 4; do
+  plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set$set\
+    --extract trans.top.hg38.mqtl.range --range\
+    --maf 0.01\
+    --recodeA\
+    --out ccls.set$set.trans.dum
+done
+
+for set in 1 2 3 4; do
+  paste <(awk '{print $1"_"$2}' ccls.set$set.trans.dum.raw | sed 's/FID_IID/snpid/') \
+    <(cut -d' ' -f7- ccls.set$set.trans.dum.raw) > ccls.set$set.trans.dum.int
+
+  datamash -W transpose <ccls.set$set.trans.dum.int |\
+    grep -v 'NA' > ccls.set$set.trans.dum.tsp
+done
+
+for set in 1 2 3 4; do
+  awk '{gsub(/_.*$/,"",$1); print $0}' ccls.set$set.trans.dum.tsp > ccls.set$set.dum.tsp.nm
+  head -1 ccls.set$set.trans.dum.tsp > ccls.set$set.trans.dum.tsp.hd
+done
+
+
+```
+
+```{r validate the effect of reported trans mQTL on methylation}
+
+setwd("~/mQTL/godmc")
+library(data.table)
+library(tidyverse)
+
+for(race in c("eur","lat")){
+  for(set in 1:4){
+    
+#race="eur"
+#set=1
+
+trans.all = fread("trans.top.hg38.mqtl.txt") %>%
+  mutate(snpid=paste0(snp_chr,":",snp_pos)) %>%
+  as.data.frame()
+
+# read genetic data of corresponding dataset
+gene = fread(paste0("ccls.set",set,".dum.tsp.nm"),header=FALSE) %>% as.data.frame() 
+names = fread(paste0("ccls.set",set,".trans.dum.tsp.hd"))  
+colnames(gene) = colnames(names)
+gene1 = gene%>%
+  separate(snpid,sep=":",c("chr","pos","ref","alt")) %>% mutate(snpid=paste0(chr,":",pos)) %>%
+  select(-chr,-pos,-ref,-alt) %>%
+  distinct(snpid,.keep_all = TRUE)
+
+# read methylation data
+if(set == 1) methy = read_rds("~/sets/set1/beta_ritu_imputed_set1.rds")
+if(set == 2) methy = read_rds("~/sets/set2/beta_ritu_imputed_set2.rds")
+if(set == 3) methy = read_rds("~/sets/set3/beta_ritu_imputed_set3.rds")
+if(set == 4) methy = read_rds("~/sets/set4/beta_funnorm_bmiq_imputed_set4.rds")
+
+if(set %in% c(1,2)) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) 
+if(set==3) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  filter(Trisomy21==0)
+if(set==4) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  filter(smp_type=="bg") 
+
+if(race=="eur") clinical0 = clinical0 %>% filter(race==1)
+if(race=="lat") clinical0 = clinical0 %>% filter(race==3)
+
+
+if(race=="eur") PCs = fread(paste0("~/mQTL/set",set,".EUR.pca.cov.eigenvec")) 
+if(race=="lat") PCs = fread(paste0("~/mQTL/set",set,".LAT.pca.cov.eigenvec")) 
+
+PCs1 = PCs %>% mutate(ID = paste0(`#FID`,"_",IID))
+
+clinical = clinical0[,c("beadPosition","subjectId","sex","plate")] %>%
+  na.omit() %>%
+  mutate(ID = paste0("0_",subjectId),
+         plate=as.factor(plate))%>%
+  distinct(ID,.keep_all = TRUE)  %>%
+  inner_join(PCs1,by="ID")
+
+methyInd = which(clinical$beadPosition %in% colnames(methy))
+snpInd = which(clinical$ID %in% colnames(gene1))
+subsInd = intersect(methyInd,snpInd)
+
+clinical1 = clinical[subsInd,]
+rownames(clinical1)=c()
+gene_select = gene1[,c("snpid",clinical1$ID)] %>% 
+  column_to_rownames(var="snpid") %>%
+  t %>% as.data.frame()
+
+rownames(methy) <- c()
+methy_select = methy[,c("probeId",clinical1$beadPosition)] %>% 
+  column_to_rownames(var="probeId") %>%
+  t %>% as.data.frame()
+
+ind1 = which(trans.all$cpg%in%colnames(methy_select))
+ind2 = which(trans.all$snpid%in%colnames(gene_select))
+trans.select = trans.all[intersect(ind1,ind2),]
+
+probes <- trans.select[,"cpg"]
+
+reg <- lapply(probes,function(probe){
+SNPname =  trans.select[which(trans.select$cpg == probe), "snpid"]  %>% as.character()  
+SNP =  gene_select[, SNPname] 
+c(data.frame(CpG=probe, snp=SNPname),summary(
+  lm( methy_select[,probe] ~ SNP + clinical1$sex + clinical1$plate + 
+        clinical1$PC1  + clinical1$PC2 + clinical1$PC3 + clinical1$PC4 +
+        clinical1$PC5 + clinical1$PC6 + clinical1$PC7 + clinical1$PC8 +
+        clinical1$PC9 + clinical1$PC10))$coefficients[2,c(1,2,4)]) })
+reg_2 <- bind_rows(reg) %>% as.data.frame() 
+write.table(reg_2,paste0("trans.vali.set",set,".",race,".txt"),
+            quote=FALSE,
+            sep='\t',
+            row.names = FALSE, 
+            col.names = TRUE)  
+  }
+}
+
+    
+
+```
+
+```{r check concordance of tran mQTL}
+
+setwd("~/mQTL/godmc")
+library(data.table)
+library(tidyverse)
+library(ggpubr)
+library(cowplot)
+
+#race="eur"
+#set=1
+for(race in c("eur","lat")){
+  for(set in 1:4){
+
+ccls = fread(paste0("trans.vali.set",set,".",race,".txt"))%>%
+  mutate(Estimate_ccls=Estimate,P_ccls=`Pr(>|t|)`,log_P_ccls=-log10(`Pr(>|t|)`)) %>%
+  dplyr::select(snp,Estimate_ccls,P_ccls,log_P_ccls)
+
+# print(race)
+# print(set)
+# print(nrow(ccls))
+# }}
+
+trans.all = fread("trans.top.hg38.mqtl.txt") %>%
+  mutate(snpid=paste0(snp_chr,":",snp_pos)) %>%
+  as.data.frame() %>%
+  mutate(pval=as.numeric(pval),beta_a1=as.numeric(beta_a1))%>%
+  mutate(snp=snpid,Estimate_godmc=beta_a1,P_godmc=pval,log_P_godmc=-log10(pval))%>%
+  dplyr::select(snp, Estimate_godmc,P_godmc,log_P_godmc) %>%
+  inner_join(ccls,by="snp")
+
+#figure S5
+iris1=trans.all %>%
+  filter(is.finite(log_P_godmc))%>%
+  ggplot(aes(x=log_P_ccls,y=log_P_godmc))+
+  xlab("−log10 (P-value), Li et al") +
+  ylab("−log10 (P-value), Min et al") +
+  geom_point(alpha=0.6,color="blue")+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=19),
+        axis.text.y = element_text(size=19),
+        axis.title.x = element_text(size=21),
+        axis.title.y = element_text(size=21))
+iris2=trans.all %>%
+  ggplot(aes(x=Estimate_ccls,y=Estimate_godmc))+
+  xlab("Effect sizes, Li et al") +
+  ylab("Effect sizes, Min et al") +
+  geom_point(alpha=0.6,color="blue")+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=19),
+        axis.text.y = element_text(size=19),
+        axis.title.x = element_text(size=21),
+        axis.title.y = element_text(size=21))
+plot_grid(iris2, iris1)
+ggsave(paste0("gene_p_correlation_set",set, "_", race,".png"),width = 12,height = 8)
+
+# reviewer request: have exact numbers to support low concordance
+a = cor(trans.all$Estimate_godmc,trans.all$Estimate_ccls,method = "pearson")
+print(paste0("set: ",set," race:",race))
+print("correlation between coefficients")
+print(a)
+a = cor(trans.all$P_godmc,trans.all$P_ccls,method = "pearson")
+print("correlation between P values")
+print(a)
+  
+}}
+
+
+```
+
+>> cis mQTL
+
+```{bash selecting transQTLs in include}
+
+cd ~/mQTL/godmc
+
+awk -v FS=, -v OFS="\t" '$11=="TRUE" {print $1,$2,$3,$4,$5}' assoc_meta_all.csv |\
+  grep -v "INDEL" |\
+  sed 's/"//g' |\
+  sed 's/:SNP//g'  > cis.all.mqtl.txt
+
+# lifover from hg19 to hg38
+
+awk '{print $2}' cis.all.mqtl.txt |\
+  awk -v FS=: -v OFS="\t" '{print $1, ($2-1), $2, FNR}' > cis.all.mqtl.hg19.bed
+
+liftOver cis.all.mqtl.hg19.bed\
+  /ccls/home/sli/dependencies/liftOver/hg19ToHg38.over.chain\
+   cis.all.mqtl.hg38.bed\
+   cis.all.mqtl.unlifted.bed
+
+cat <(awk '{print $1,$3,$4}' cis.all.mqtl.hg38.bed) \
+  <(grep -v "#" cis.all.mqtl.unlifted.bed | awk '{print "NA","NA",$4}') |\
+  sort -k3,3n > cis.all.mqtl.hg38.coor
+
+paste cis.all.mqtl.txt cis.all.mqtl.hg38.coor |\
+  awk '{print $1,$6,$7,$3,$4,$5}' > cis.hg38.mqtl.txt
+sed -i '1i cpg  snp_chr snp_pos beta_a1 se  pval' cis.hg38.mqtl.txt
+
+tail -n +2 cis.hg38.mqtl.txt | sort -k1,1 -k6,6g  | sort -u -k1,1  > cis.top.hg38.mqtl.txt
+sed -i '1i cpg  snp_chr snp_pos beta_a1 se  pval' cis.top.hg38.mqtl.txt
+
+awk '{print $2,$3,$3,FNR}' cis.top.hg38.mqtl.txt | tail -n +2 > cis.top.hg38.mqtl.range
+
+# choosing genetic files from that cis.top.hg38.mqtl.range
+for set in 1 2 3 4; do
+  plink --bfile /ccls/proj_circle2_p3/users/sebastian/bySET/ccls.gwas.set$set\
+    --extract cis.top.hg38.mqtl.range --range\
+    --maf 0.01\
+    --recodeA\
+    --out ccls.set$set.cis.dum
+done
+
+for set in 1 2 3 4; do
+  paste <(awk '{print $1"_"$2}' ccls.set$set.cis.dum.raw | sed 's/FID_IID/snpid/') \
+    <(cut -d' ' -f7- ccls.set$set.cis.dum.raw) > ccls.set$set.cis.dum.int
+
+  datamash -W transpose <ccls.set$set.cis.dum.int |\
+    grep -v 'NA' > ccls.set$set.cis.dum.tsp
+done
+
+for set in 1 2 3 4; do
+  awk '{gsub(/_.*$/,"",$1); print $0}' ccls.set$set.cis.dum.tsp > ccls.set$set.dum.tsp.nm
+  head -1 ccls.set$set.cis.dum.tsp > ccls.set$set.cis.dum.tsp.hd
+done
+
+
+```
+
+```{r validate the effect of reported cis mQTL on methylation}
+setwd("~/mQTL/godmc")
+library(data.table)
+library(tidyverse)
+
+for(race in c("eur","lat")){
+  for(set in 1:4){
+    
+#race="eur"
+#set=1
+
+trans.all = fread("cis.top.hg38.mqtl.txt") %>%
+  mutate(snpid=paste0(snp_chr,":",snp_pos)) %>%
+  as.data.frame()
+
+# read genetic data of corresponding dataset
+gene = fread(paste0("ccls.set",set,".dum.tsp.nm"),header=FALSE) %>% as.data.frame() 
+names = fread(paste0("ccls.set",set,".cis.dum.tsp.hd"))  
+colnames(gene) = colnames(names)
+gene1 = gene%>%
+  separate(snpid,sep=":",c("chr","pos","ref","alt")) %>% mutate(snpid=paste0(chr,":",pos)) %>%
+  select(-chr,-pos,-ref,-alt) %>%
+  distinct(snpid,.keep_all = TRUE)
+
+# read methylation data
+if(set == 1) methy = read_rds("~/sets/set1/beta_ritu_imputed_set1.rds")
+if(set == 2) methy = read_rds("~/sets/set2/beta_ritu_imputed_set2.rds")
+if(set == 3) methy = read_rds("~/sets/set3/beta_ritu_imputed_set3.rds")
+if(set == 4) methy = read_rds("~/sets/set4/beta_funnorm_bmiq_imputed_set4.rds")
+
+if(set %in% c(1,2)) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) 
+if(set==3) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  filter(Trisomy21==0)
+if(set==4) clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+  filter(smp_type=="bg") 
+
+if(race=="eur") clinical0 = clinical0 %>% filter(race==1)
+if(race=="lat") clinical0 = clinical0 %>% filter(race==3)
+
+
+if(race=="eur") PCs = fread(paste0("~/mQTL/set",set,".EUR.pca.cov.eigenvec")) 
+if(race=="lat") PCs = fread(paste0("~/mQTL/set",set,".LAT.pca.cov.eigenvec")) 
+
+PCs1 = PCs %>% mutate(ID = paste0(`#FID`,"_",IID))
+
+clinical = clinical0[,c("beadPosition","subjectId","sex","plate")] %>%
+  na.omit() %>%
+  mutate(ID = paste0("0_",subjectId),
+         plate=as.factor(plate))%>%
+  distinct(ID,.keep_all = TRUE)  %>%
+  inner_join(PCs1,by="ID")
+
+methyInd = which(clinical$beadPosition %in% colnames(methy))
+snpInd = which(clinical$ID %in% colnames(gene1))
+subsInd = intersect(methyInd,snpInd)
+
+clinical1 = clinical[subsInd,]
+rownames(clinical1)=c()
+gene_select = gene1[,c("snpid",clinical1$ID)] %>% 
+  column_to_rownames(var="snpid") %>%
+  t %>% as.data.frame()
+
+rownames(methy) <- c()
+methy_select = methy[,c("probeId",clinical1$beadPosition)] %>% 
+  column_to_rownames(var="probeId") %>%
+  t %>% as.data.frame()
+
+ind1 = which(trans.all$cpg%in%colnames(methy_select))
+ind2 = which(trans.all$snpid%in%colnames(gene_select))
+trans.select = trans.all[intersect(ind1,ind2),]
+
+probes <- trans.select[,"cpg"]
+
+reg <- lapply(probes,function(probe){
+SNPname =  trans.select[which(trans.select$cpg == probe), "snpid"]  %>% as.character()  
+SNP =  gene_select[, SNPname] 
+c(data.frame(CpG=probe, snp=SNPname),summary(
+  lm( methy_select[,probe] ~ SNP + clinical1$sex + clinical1$plate + 
+        clinical1$PC1  + clinical1$PC2 + clinical1$PC3 + clinical1$PC4 +
+        clinical1$PC5 + clinical1$PC6 + clinical1$PC7 + clinical1$PC8 +
+        clinical1$PC9 + clinical1$PC10))$coefficients[2,c(1,2,4)]) })
+reg_2 <- bind_rows(reg) %>% as.data.frame() 
+write.table(reg_2,paste0("cis.vali.set",set,".",race,".txt"),
+            quote=FALSE,
+            sep='\t',
+            row.names = FALSE, 
+            col.names = TRUE)  
+  }
+}
+
+    
+
+```
+
+```{r check concordance of cis mQTL}
+
+setwd("~/mQTL/godmc")
+library(data.table)
+library(tidyverse)
+library(ggpubr)
+library(cowplot)
+
+#race="eur"
+#set=1
+for(race in c("eur","lat")){
+  for(set in 1:4){
+
+ccls = fread(paste0("cis.vali.set",set,".",race,".txt"))%>%
+  mutate(Estimate_ccls=Estimate,P_ccls=`Pr(>|t|)`,log_P_ccls=-log10(`Pr(>|t|)`)) %>%
+  dplyr::select(snp,Estimate_ccls,P_ccls,log_P_ccls)
+
+# print(race)
+# print(set)
+# print(nrow(ccls))
+# }}
+
+trans.all = fread("cis.top.hg38.mqtl.txt") %>%
+  mutate(snpid=paste0(snp_chr,":",snp_pos)) %>%
+  as.data.frame() %>%
+  mutate(pval=as.numeric(pval),beta_a1=as.numeric(beta_a1))%>%
+  mutate(snp=snpid,Estimate_godmc=beta_a1,P_godmc=pval,log_P_godmc=-log10(pval))%>%
+  dplyr::select(snp, Estimate_godmc,P_godmc,log_P_godmc) %>%
+  inner_join(ccls,by="snp")
+
+#figure S4
+iris1=trans.all %>%
+  filter(is.finite(log_P_godmc))%>%
+  ggplot(aes(x=log_P_ccls,y=log_P_godmc))+
+  xlab("−log10 (P-value), Li et al") +
+  ylab("−log10 (P-value), Min et al") +
+  geom_point(alpha=0.6,color="blue")+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=19),
+        axis.text.y = element_text(size=19),
+        axis.title.x = element_text(size=21),
+        axis.title.y = element_text(size=21))
+iris2=trans.all %>%
+  ggplot(aes(x=Estimate_ccls,y=Estimate_godmc))+
+  xlab("Effect sizes, Li et al") +
+  ylab("Effect sizes, Min et al") +
+  geom_point(alpha=0.6,color="blue")+
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  theme_bw()+
+  theme(axis.text.x = element_text(size=19),
+        axis.text.y = element_text(size=19),
+        axis.title.x = element_text(size=21),
+        axis.title.y = element_text(size=21))
+plot_grid(iris2, iris1)
+ggsave(paste0("cis.gene_p_correlation_set",set, "_", race,".png"),width = 12,height = 8)
+  
+# reviewer request: have exact numbers to support low concordance
+a = cor(trans.all$Estimate_godmc,trans.all$Estimate_ccls,method = "pearson")
+print(paste0("set: ",set," race:",race))
+print("correlation between coefficients")
+print(a)
+a = cor(trans.all$P_godmc,trans.all$P_ccls,method = "pearson")
+print("correlation between P values")
+print(a)
+}}
+
+
+```
+
+>> number of eQTLs from significant genes
+
+```{r number of eQTLs from significant genes}
+
+# wget https://storage.googleapis.com/gtex_analysis_v8/single_tissue_qtl_data/GTEx_Analysis_v8_eQTL.tar
+setwd("~/mQTL/eqtl")
+library(data.table)
+library(tidyverse)
+
+
+k450k = read.table("~/mQTL/mqtl.k.450K.sim",header=TRUE) %>% 
+  mutate(snp_id = SNP) %>%
+  filter(grepl("^cg",CpG)) %>%
+  separate(SNP,c("chr","pos","ref","alt")) 
+
+epic =  read.table("~/mQTL/mqtl.k.EPIC.sim",header=TRUE) %>% 
+  mutate(snp_id = SNP) %>%
+  filter(grepl("^cg",CpG)) %>%
+  separate(SNP,c("chr","pos","ref","alt"))
+
+allSNPs = rbind(k450k,epic) %>%
+  as.data.frame() %>%
+  distinct(snp_id,.keep_all=TRUE)
+
+nrow(allSNPs)
+# [1] 596249
+
+alleqtl = fread("~/mQTL/eqtl/GTEx_Analysis_v8_eQTL/Whole_Blood.v8.signif_variant_gene_pairs.txt") %>%
+  separate(variant_id,c("chr","pos","ref","alt","build")) 
+
+nrow(alleqtl)
+# 2414653
+
+hits = inner_join(allSNPs,alleqtl,by=c("chr","pos"))
+
+nrow(hits)
+# [1] 325556
+
+```
+
+
+###############################################################
+###############################################################
+###############################################################
+###############################################################
+
+#Not important!
+
+# Comparing the significance of CORSIVs and non-CORSIVs 
+
+```{bash choosing the most significant cpg-snp pair for each cpg}
+
+cd ~/mQTL
+
+sed '1d' mqtl.k.450K.sim | sort -u -k2,2  > 450K.cpg.snp.p
+
+sed '1d' mqtl.k.EPIC.sim | sort -u -k2,2  > EPIC.cpg.snp.p
+
+```
+
+```{r}
+
+setwd("~/mQTL")
+library(data.table)
+library(tidyverse)
+library(hrbrthemes)
+
+corsiv = fread("~/Corsivs/CoRSIVswAnnotation.txt") %>%
+  select(CG)
+
+mqtl.450k.all = fread("450K.cpg.snp.p") %>%
+  mutate(cor=0,cpg=V2,P=V3) %>%
+  filter(str_detect(cpg, "cg")) %>%
+  mutate(P=as.numeric(P),logP=-log10(P))%>%
+  filter(is.finite(logP))%>%
+  select(cpg,P,cor,logP)
+mqtl.450k.all$cor[which(mqtl.450k.all$cpg %in% corsiv$CG)]=1
+
+mqtl.450k.all %>%
+  na.omit()%>%
+  mutate(cor=as.factor(cor),logP=-log10(P))%>%
+  ggplot(aes(x=cor, y=logP, fill=cor))+
+  geom_boxplot(outlier.size=0.2)+
+  theme_bw()+
+  ggtitle("smallest P value in mQTL by CORSIV status, 450k")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("mqtlP450kByCOR.png",width = 8,height = 6)
+
+# compare by t test
+t.test(mqtl.450k.all$logP[mqtl.450k.all$cor==0],mqtl.450k.all$logP[mqtl.450k.all$cor==1])
+
+# 	Welch Two Sample t-test
+# 
+# data:  mqtl.450k.all$logP[mqtl.450k.all$cor == 0] and mqtl.450k.all$logP[mqtl.450k.all$cor == 1]
+# t = -28.804, df = 2621.3, p-value < 2.2e-16
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -38.65730 -33.72942
+# sample estimates:
+# mean of x mean of y 
+#  15.48204  51.67540 
+
+mqtl.EPIC.all = fread("EPIC.cpg.snp.p") %>%
+  mutate(cor=0,cpg=V2,P=V3) %>%
+  filter(str_detect(cpg, "cg")) %>%
+  mutate(P=as.numeric(P),logP=-log10(P))%>%
+  filter(is.finite(logP))%>%
+  select(cpg,P,cor,logP)
+mqtl.EPIC.all$cor[which(mqtl.EPIC.all$cpg %in% corsiv$CG)]=1
+
+mqtl.EPIC.all %>%
+  na.omit()%>%
+  mutate(cor=as.factor(cor),logP=-log10(P))%>%
+  ggplot(aes(x=cor, y=logP, fill=cor))+
+  geom_boxplot(outlier.size=0.2)+
+  theme_bw()+
+  ggtitle("smallest P value in mQTL by CORSIV status, EPIC")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("mqtlPEPICByCOR.png",width = 8,height = 6)
+
+t.test(mqtl.EPIC.all$logP[mqtl.EPIC.all$cor==0],mqtl.EPIC.all$logP[mqtl.EPIC.all$cor==1])
+
+# 	Welch Two Sample t-test
+# 
+# data:  mqtl.EPIC.all$logP[mqtl.EPIC.all$cor == 0] and mqtl.EPIC.all$logP[mqtl.EPIC.all$cor == 1]
+# t = -30.281, df = 2515.1, p-value < 2.2e-16
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -47.79412 -41.98049
+# sample estimates:
+# mean of x mean of y 
+#  22.80968  67.69698 
+
+```
+
+
+
+# downstream codes 
+# 100 pass results, deprecated
+
+```{bash Discover QTL in cis (permutation pass)}
+
+# Discover QTL in cis (permutation pass)
+## --permute integer
+## Adjust the best nominal p-value for this phenotype accounting for the number of variants and the linkage disequilibrium 
+## in its cis-window. We recommend at least 1000 permutation for the final analysis, 
+## and in most cases you will see diminishing returns when going over 5000. 
+## However, if you are doing exploratory analyses like which/how many covariates to include, you can go as low as 100. 
+## Mutually exclusive with --nominal and --mapping. RECOMMENDED=1000.
+cd ~/mQTL
+
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    for j in $(seq 0 100); do
+      QTLtools cis --vcf "${set}"."${race}".vcf.gz \
+       --bed "${set}"."${race}".sorted.bed.gz \
+       --cov "${set}"."${race}".cov \
+       --permute 100 \
+       --chunk $j 100 \
+       --normal \
+       --seed 123456 \
+       --std-err \
+       --out qtloutput_permute/permute."${set}"."${race}".mqtl."${j}"_of_100.txt
+    done
+  done
+done
+
+# Combining results of all the output files
+
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    cat qtloutput_permute/permute."${set}"."${race}".mqtl.*_of_100.txt > permute."${set}"."${race}".mqtl.txt
+  done
+done
+
+# create an ID for identification, create a column for sample size
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    N=$(wc -l Subs."${set}"."${race}".txt | awk '{print $1}')
+    awk '{print $1"-"$8, $0}' permute."${set}"."${race}".mqtl.txt |\
+    awk -v var=$N '{print $0, var}' |
+    awk 'NR==1{$1="ID" ; $NF="N"};1'>\
+    "${set}"."${race}".mqtl.txt
+  done
+done
+
+```
+
+```{bash downstream processing of output files}
+# meta-analysis by platform
+
+cd ~/mQTL
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set1.EUR.mqtl.txt
+PROCESS set2.EUR.mqtl.txt
+PROCESS set1.LAT.mqtl.txt
+PROCESS set2.LAT.mqtl.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.450K.txt
+
+metal
+MARKER ID
+EFFECT slope
+PVALUE adj_beta_pval
+SCHEME STDERR
+STDERR slope_se
+WEIGHTLABEL N
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS set3.EUR.mqtl.txt
+PROCESS set4.EUR.mqtl.txt
+PROCESS set3.LAT.mqtl.txt
+PROCESS set4.LAT.mqtl.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL mqtl.EPIC.txt
+
+# sorting the files arranged by 1. CpG 2. P values
+
+#export LC_NUMERIC=en_US
+paste \
+  <(awk '{gsub(/-.*$/,"",$1); print $1}' mqtl.450K.txt| tail -n +2 ) \
+  <(awk '{gsub(/.*-/,"",$1); print $1}' mqtl.450K.txt| tail -n +2 ) \
+  <(awk '{print $1,$2,$3,$4,$5}' mqtl.450K.txt | tail -n +2 ) \
+  | sed '1i CpG SNP MarkerName  Effect  StdErr  P-value Direction' \
+  > mqtl.450K.scfl.0
+  head -1 mqtl.450K.scfl.0 > mqtl.450K.scfl
+  sort -k1,1 -k6,6g <(tail -n +2 mqtl.450K.scfl.0) >> mqtl.450K.scfl
+
+paste \
+  <(awk '{gsub(/-.*$/,"",$1); print $1}' mqtl.EPIC.txt| tail -n +2 ) \
+  <(awk '{gsub(/.*-/,"",$1); print $1}' mqtl.EPIC.txt| tail -n +2 ) \
+  <(awk '{print $1,$2,$3,$4,$5}' mqtl.EPIC.txt | tail -n +2 ) \
+  | sed '1i CpG SNP MarkerName  Effect  StdErr  P-value Direction' \
+  > mqtl.EPIC.scfl.0
+  head -1 mqtl.EPIC.scfl.0 > mqtl.EPIC.scfl
+  sort -k1,1 -k6,6g <(tail -n +2 mqtl.EPIC.scfl.0) >> mqtl.EPIC.scfl
+  
+awk '{print $2, $1, $6}' mqtl.450K.scfl > mqtl.450K.sim 
+awk '{print $2, $1, $6}' mqtl.EPIC.scfl > mqtl.EPIC.sim
+
+# public dataset
+awk '{print $1, $2, $4, $5, $6}' mqtl.450K.scfl > 450K.mqtl.database.txt 
+awk '{print $1, $2, $4, $5, $6}' mqtl.EPIC.scfl > EPIC.mqtl.database.txt 
+```
+
+```{r calculation of overlap between set1 and set2, set3 and set4; epic and 450k}
+
+setwd("~/mQTL")
+library(data.table)
+library(tidyverse)
+library(VennDiagram)
+library(qvalue)
+
+# set 1 and 2
+eur1 <- read.table("set1.EUR.mqtl.txt",header=TRUE)
+eur2 <- read.table("set2.EUR.mqtl.txt",header=TRUE)
+lat1 <- read.table("set1.LAT.mqtl.txt",header=TRUE)
+lat2 <- read.table("set2.LAT.mqtl.txt",header=TRUE)
+
+venn.diagram(
+  x = list(eur1$ID,eur2$ID,lat1$ID,lat2$ID),
+  category.names = c("EUR1" , "EUR2", "LAT1", "LAT2"),
+  filename = 'mqtl.set12.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+## Check overlap of significant MQTLs
+eur1.sig = eur1 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+eur2.sig = eur2 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+lat1.sig = lat1 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+lat2.sig = lat2 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+venn.diagram(
+  x = list(eur1.sig$ID,eur2.sig$ID,lat1.sig$ID,lat2.sig$ID),
+  category.names = c("EUR1" , "EUR2", "LAT1", "LAT2"),
+  filename = 'mqtl.set12.sig.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+# set 3 and 4
+eur3 <- read.table("set3.EUR.mqtl.txt",header=TRUE)
+eur4 <- read.table("set4.EUR.mqtl.txt",header=TRUE)
+lat3 <- read.table("set3.LAT.mqtl.txt",header=TRUE)
+lat4 <- read.table("set4.LAT.mqtl.txt",header=TRUE)
+
+venn.diagram(
+  x = list(eur3$ID,eur4$ID,lat3$ID,lat4$ID),
+  category.names = c("EUR3" , "EUR4", "LAT3", "LAT4"),
+  filename = 'mqtl.set34.epic.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+# sets 1,2,3 and 4
+library(venn)
+venn = list(
+Set1.European = eur1$ID,
+Set2.European = eur2$ID,
+Set1.Latino = lat1$ID,
+Set2.Latino = lat2$ID,
+Set3.European = eur3$ID,
+Set4.European = eur4$ID,
+Set3.Latino = lat3$ID,
+Set4.Latino = lat4$ID)
+
+png("all.venn.1234.png", width = 1200, height = 1200)
+venn.result =
+  venn(venn, 
+       ilabels = TRUE, 
+       zcolor = "style",
+       size = 100, 
+       ilcs = 1.5,
+       cexil = 1.2, 
+       cexsn = 1.5)
+dev.off()
+
+## Check overlap of significant MQTLs
+eur3.sig = eur3 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+eur4.sig = eur4 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+lat3.sig = lat3 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+lat4.sig = lat4 %>%
+  mutate(qv = qvalue(adj_beta_pval)$qvalue) %>%
+  filter(qv < 0.05) 
+
+venn.diagram(
+  x = list(eur3.sig$ID,eur4.sig$ID,lat3.sig$ID,lat4.sig$ID),
+  category.names = c("EUR3" , "EUR4", "LAT3", "LAT4"),
+  filename = 'mqtl.set34.sig.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink","tomato1","hotpink")
+)
+
+library(venn)
+venn = list(
+Set1.European = eur1.sig$ID,
+Set2.European = eur2.sig$ID,
+Set1.Latino = lat1.sig$ID,
+Set2.Latino = lat2.sig$ID,
+Set3.European = eur3.sig$ID,
+Set4.European = eur4.sig$ID,
+Set3.Latino = lat3.sig$ID,
+Set4.Latino = lat4.sig$ID)
+
+png("sig.venn.1234.png", width = 1200, height = 1200)
+venn.result =
+  venn(venn, 
+       ilabels = TRUE, 
+       zcolor = "style",
+       size = 100, 
+       ilcs = 1.5,
+       cexil = 1.2, 
+       cexsn = 1.5)
+dev.off()
+
+# png("sig.venn.eur.1234.png", width = 1200, height = 1200)
+# venn.result =
+#   venn(venn[c("EUR1","EUR2","EUR3","EUR4")], ilabels = TRUE, 
+#        zcolor = "style", size = 25, cexil = 1.2, cexsn = 1.5)
+# dev.off()
+# 
+# png("sig.venn.lat.1234.png", width = 1200, height = 1200)
+# venn.result =
+#   venn(venn[c("LAT1","LAT2","LAT3","LAT4")], ilabels = TRUE, 
+#        zcolor = "style", size = 25, cexil = 1.2, cexsn = 1.5)
+# dev.off()
+# 
+# png("sig.venn.12.png", width = 1200, height = 1200)
+# venn.result =
+#   venn(venn[c("EUR1","EUR2","LAT1","LAT2")], ilabels = TRUE, 
+#        zcolor = "style", size = 25, cexil = 1.2, cexsn = 1.5)
+# dev.off()
+# 
+# png("sig.venn.34.png", width = 1200, height = 1200)
+# venn.result =
+#   venn(venn[c("EUR3","EUR4","LAT3","LAT4")], ilabels = TRUE, 
+#        zcolor = "style", size = 25, cexil = 1.2, cexsn = 1.5)
+# dev.off()
+
+
+# 450k and epic
+
+## all results
+p450k = read.table("mqtl.450K.scfl",header=TRUE)
+epic = read.table("mqtl.EPIC.scfl",header=TRUE)
+
+venn.diagram(
+  x = list(p450k$MarkerName,epic$MarkerName),
+  category.names = c("450k" , "EPIC"),
+  filename = 'mqtl.platform.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink")
+)
+
+## results with 1 cpg each
+p450k = read.table("mqtl.450K.scfl",header=TRUE)
+epic = read.table("mqtl.EPIC.scfl",header=TRUE)
+
+venn.diagram(
+  x = list(p450k$MarkerName,epic$MarkerName),
+  category.names = c("450k" , "EPIC"),
+  filename = 'mqtl.platform.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink")
+)
+
+
+## Check overlap of significant MQTLs
+p450k.sig = p450k %>%
+  arrange(CpG ,`P.value`) %>%
+  distinct(CpG,.keep_all = TRUE) %>%
+  mutate(bonferroni = p.adjust(`P.value`, method = "bonferroni", n = length(`P.value`))) %>%
+  filter(bonferroni < 0.05) 
+
+epic.sig = epic %>%
+  arrange(CpG ,`P.value`) %>%
+  distinct(CpG,.keep_all = TRUE) %>%
+  mutate(bonferroni = p.adjust(`P.value`, method = "bonferroni", n = length(`P.value`))) %>%
+  filter(bonferroni < 0.05) 
+
+venn.diagram(
+  x = list(p450k.sig$MarkerName,epic.sig$MarkerName),
+  category.names = c("450k" , "EPIC"),
+  filename = 'mqtl.platform.sig.venn.png',
+  output=TRUE,
+  fill = c("lightskyblue1","lightpink")
+)
+
+# Number of CpGs with a mqtl
+# 483287 CpGs on 450k
+# 865135 CpGs on EPIC
+eur1 = read.table("set1.EUR.mqtl.txt",header=TRUE)
+length(unique(eur1[,"phe_id"]))
+# 471824
+length(unique(eur1[,"phe_id"]))/483287
+# 0.9762812
+
+eur2 = read.table("set2.EUR.mqtl.txt",header=TRUE)
+length(unique(eur2[,"phe_id"]))
+# 473037
+length(unique(eur2[,"phe_id"]))/483287
+# 0.9787911
+
+lat1 = read.table("set1.LAT.mqtl.txt",header=TRUE)
+length(unique(lat1[,"phe_id"]))
+# 471824
+length(unique(lat1[,"phe_id"]))/483287
+# 0.9762812
+
+lat2 = read.table("set2.LAT.mqtl.txt",header=TRUE)
+length(unique(lat2[,"phe_id"]))
+# 473037
+length(unique(lat2[,"phe_id"]))/483287
+# 0.9787911
+
+eur3 = read.table("set3.EUR.mqtl.txt",header=TRUE)
+length(unique(eur3[,"phe_id"]))
+# 845582
+length(unique(eur3[,"phe_id"]))/865135
+# 0.9773989
+
+eur4 = read.table("set4.EUR.mqtl.txt",header=TRUE)
+length(unique(eur4[,"phe_id"]))
+# 846265
+length(unique(eur4[,"phe_id"]))/865135
+# 0.9781884
+
+lat3 = read.table("set3.LAT.mqtl.txt",header=TRUE)
+length(unique(lat3[,"phe_id"]))
+# 845582
+length(unique(lat3[,"phe_id"]))/865135
+# 0.9773989
+
+lat4 = read.table("set4.LAT.mqtl.txt",header=TRUE)
+length(unique(lat4[,"phe_id"]))
+# 846265
+length(unique(lat4[,"phe_id"]))/865135
+# 0.9781884 
+
+p450k = read.table("mqtl.450K.scfl",header=TRUE)
+length(unique(p450k[,"CpG"]))
+# 469569
+length(unique(p450k[,"CpG"]))/483287
+# 0.9716152
+
+epic = read.table("mqtl.EPIC.scfl",header=TRUE)
+length(unique(epic[,"CpG"]))
+# 842094
+length(unique(epic[,"CpG"]))/865135
+# 0.9733672
+
+```
+
+# other codes originally from USC
+
+```{bash KEREN project} 
+cd /scratch/lishaobo/mqtl/results_permute
+
+# metal
+# MARKER ID
+# EFFECT regSlope
+# PVALUE adjP
+# WEIGHTLABEL N
+# VERBOSE OFF
+# GENOMICCONTROL OFF
+# PROCESS permute.mqtl.set1.EUR.chr21.txt
+# PROCESS permute.mqtl.set2.EUR.chr21.txt
+# PROCESS permute.mqtl.set3.EUR.chr21.txt
+# PROCESS permute.mqtl.set4.EUR.chr21.txt
+# PROCESS permute.mqtl.set1.LAT.chr21.txt
+# PROCESS permute.mqtl.set2.LAT.chr21.txt
+# PROCESS permute.mqtl.set3.LAT.chr21.txt
+# PROCESS permute.mqtl.set4.LAT.chr21.txt
+# ANALYZE
+# QUIT
+# mv METAANALYSIS1.TBL keren.mqtl.meta.chr21.txt
+
+
+```
+
+```{r permute results, further mQTL selection process}
+setwd("/scratch/lishaobo/mqtl")
+library(data.table)
+library(tidyverse)
+library(qvalue)
+
+# for(race in c("eur","lat")){
+#   for(chr in c(1:22)){
+#     raw <- fread(paste0("permute.mqtl.sz.",race,".chr",chr,".txt"))
+#     if(nrow(raw)!=0){
+#       
+#     all<-raw %>%
+#       as.data.frame() %>%
+#       dplyr::rename('P' = "P-value") %>%
+#       dplyr::select(-Allele1, -Allele2,-Weight) %>%
+#       dplyr::mutate(cpg = gsub("-.*$","",MarkerName)) %>%
+#       dplyr::arrange(cpg,P) %>%
+#       dplyr::distinct(cpg,.keep_all = TRUE) %>%
+#       dplyr::mutate(adjP= p.adjust(P,method ="fdr"))%>%
+#       dplyr::filter(adjP<0.05 & adjP >=0)
+#     
+#     all_anno <- all %>%
+#       dplyr::mutate(SNPID = gsub("^.*-","",MarkerName)) %>%
+#       separate(SNPID, c("CHROM","POS","REF","ALT")) %>%
+#       arrange(CHROM,POS)
+#     
+#     
+#     write.table(all_anno, paste0("results_permute/",race,".chr",chr,".permute.mqtl.txt"),
+#                 sep="\t",quote=FALSE,row.names = FALSE)
+#     }
+#   }
+# }
+
+setwd("/scratch/lishaobo/mqtl/results")
+
+for(race in c("eur","lat")){
+  for(plt in c("450K","EPIC")){
+
+#mqtl.EPIC.lat.txt 
+#  race="eur"
+#  plt="450K"
+  
+    raw <- fread(paste0("mqtl.",plt,".",race,".txt"))
+    if(nrow(raw)!=0){
+
+      
+    all<-raw %>%
+      as.data.frame() %>%
+      dplyr::rename('P' = "P-value") %>%
+      dplyr::select(-Allele1, -Allele2) %>%
+      dplyr::mutate(cpg = gsub("-.*$","",MarkerName)) %>%
+      dplyr::arrange(cpg,P) %>%
+      dplyr::distinct(cpg,.keep_all = TRUE) %>%
+      dplyr::mutate(adjP= p.adjust(P,method ="fdr"))%>%
+      dplyr::filter(adjP<0.05)
+    
+    all_anno <- all %>%
+      dplyr::mutate(SNPID = gsub("^.*-","",MarkerName)) %>%
+      separate(SNPID, c("CHROM","POS","REF","ALT")) %>%
+      arrange(CHROM,POS)
+
+    cat(paste0("mqtl.",plt,".",race,".txt"))
+    print(nrow(all_anno))
+    
+    write.table(all_anno, paste0("mqtl.adj.",plt,".",race,".txt"), sep="\t",quote=FALSE,row.names = FALSE)
+  
+    }
+    
+  }}
+
+# a separate version for meta of ALL FILES
+setwd("/scratch/lishaobo/mqtl/results")
+
+raw <- fread("mqtl.allcom.txt")
+all<-raw %>%
+  as.data.frame() %>%
+  dplyr::rename('P' = "P-value") %>%
+  dplyr::select(-Allele1, -Allele2) %>%
+  dplyr::mutate(cpg = gsub("-.*$","",MarkerName)) %>%
+  dplyr::arrange(cpg,P) %>%
+  dplyr::distinct(cpg,.keep_all = TRUE) %>%
+  dplyr::mutate(adjP= p.adjust(P,method ="fdr"))%>%
+  dplyr::filter(adjP<0.05)
+all_anno <- all %>%
+  dplyr::mutate(SNPID = gsub("^.*-","",MarkerName)) %>%
+  separate(SNPID, c("CHROM","POS","REF","ALT")) %>%
+  arrange(CHROM,POS)
+write.table(all_anno, "mqtl.allcom.adj.txt", sep="\t",quote=FALSE,row.names = FALSE)
+  
+  
+```
+
+```{r permute, calculation of overlap between EUR and LAT, adjusted and unadjusted}
+
+setwd("/scratch/lishaobo/mqtl/results")
+
+library(data.table)
+library(tidyverse)
+library(VennDiagram)
+
+eur450k <- read.table("mqtl.adj.450K.eur.txt",header=TRUE)
+lat450k <- read.table("mqtl.adj.450K.lat.txt",header=TRUE)
+eurEPIC <- read.table("mqtl.adj.EPIC.eur.txt",header=TRUE)
+latEPIC <- read.table("mqtl.adj.EPIC.lat.txt",header=TRUE)
+
+
+venn.diagram(
+  x = list(eur450k$MarkerName,lat450k$MarkerName,eurEPIC$MarkerName,latEPIC$MarkerName),
+  category.names = c("eur450k" , "lat450k","eurEPIC","latEPIC"),
+  filename = 'permute.mqtl.venn.png',
+  output=TRUE)
+
+
+eur450k <- fread("mqtl.450K.eur.txt",header=TRUE)
+lat450k <- fread("mqtl.450K.lat.txt",header=TRUE)
+eurEPIC <- fread("mqtl.EPIC.eur.txt",header=TRUE)
+latEPIC <- fread("mqtl.EPIC.lat.txt",header=TRUE)
+
+
+venn.diagram(
+  x = list(eur450k$MarkerName,lat450k$MarkerName,eurEPIC$MarkerName,latEPIC$MarkerName),
+  category.names = c("eur450k" , "lat450k","eurEPIC","latEPIC"),
+  filename = 'permute.mqtl.unad.venn.png',
+  output=TRUE)
+
+```
+
+```{r permute, distribution across genome}
+setwd("/scratch/lishaobo/mqtl/results")
+library(data.table)
+library(tidyverse)
+
+eur450k <- read.table("mqtl.adj.450K.eur.txt",header=TRUE)
+lat450k <- read.table("mqtl.adj.450K.lat.txt",header=TRUE)
+eurEPIC <- read.table("mqtl.adj.EPIC.eur.txt",header=TRUE)
+latEPIC <- read.table("mqtl.adj.EPIC.lat.txt",header=TRUE)
+
+table(eur450k$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in EUR 450k, permute pass")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distribution.permute.450k.EUR.png")
+
+table(eurEPIC$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in EUR EPIC, permute pass")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distribution.permute.EPIC.EUR.png")
+
+
+table(lat450k$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in LAT 450k, permute pass")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distribution.permute.450k.LAT.png")
+
+table(latEPIC$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in LAT EPIC, permute pass")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distribution.permute.EPIC.LAT.png")
+
+```
+
+```{r Plotting effect sizes for comparison}
+
+eur450k <- fread("mqtl.450K.eur.txt",header=TRUE) %>%
+  rename( "Effect_eur_450k" = "Effect",
+          "Pvalue_eur_450k" = "P-value")
+lat450k <- fread("mqtl.450K.lat.txt",header=TRUE)%>%
+  rename( "Effect_lat_450k" = "Effect",
+          "Pvalue_lat_450k" = "P-value")
+eurEPIC <- fread("mqtl.EPIC.eur.txt",header=TRUE)%>%
+  rename( "Effect_eur_epic" = "Effect",
+          "Pvalue_eur_epic" = "P-value")
+latEPIC <- fread("mqtl.EPIC.lat.txt",header=TRUE)%>%
+  rename( "Effect_lat_epic" = "Effect",
+          "Pvalue_lat_epic" = "P-value")
+eur450kadj <- fread("mqtl.adj.450K.eur.txt",header=TRUE)%>%
+  rename( "Effect_eur_450k_adj" = "Effect",
+          "Pvalue_eur_450k_adj" = "P")
+lat450kadj <- fread("mqtl.adj.450K.lat.txt",header=TRUE)%>%
+  rename( "Effect_lat_450k_adj" = "Effect",
+          "Pvalue_lat_450k_adj" = "P")
+eurEPICadj <- fread("mqtl.adj.EPIC.eur.txt",header=TRUE)%>%
+  rename( "Effect_eur_epic_adj" = "Effect",
+          "Pvalue_eur_epic_adj" = "P")
+latEPICadj <- fread("mqtl.adj.EPIC.lat.txt",header=TRUE)%>%
+  rename( "Effect_lat_epic_adj" = "Effect",
+          "Pvalue_lat_epic_adj" = "P")
+
+P450k = inner_join(eur450k,lat450k,by="MarkerName") %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Effect_eur_450k, y=Effect_lat_450k)) +
+  geom_point()+
+  geom_smooth()+
+  theme_bw()+
+  labs(x="Effect, eur",y="Effect, lat")+
+  ggtitle("effect sizes of eur and lat mqtls, on 450k, unadjusted")
+ggsave("effect.450k.unad.png",width = 8,height = 6)
+
+PEpic = inner_join(eurEPIC,latEPIC,by="MarkerName") %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Effect_eur_epic, y=Effect_lat_epic)) +
+  geom_point()+
+  geom_smooth()+
+  theme_bw()+
+  labs(x="Effect, eur",y="Effect, lat")+
+  ggtitle("effect sizes of eur and lat mqtls, on EPIC, unadjusted")
+ggsave("effect.epic.unad.png",width = 8,height = 6)
+
+P450kAdj = inner_join(eur450kadj,lat450kadj,by="MarkerName") %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Effect_eur_450k_adj, y=Effect_lat_450k_adj)) +
+  geom_point()+
+  geom_smooth()+
+  theme_bw()+
+  labs(x="Effect, eur",y="Effect, lat")+
+  ggtitle("effect sizes of eur and lat mqtls, on EPIC, adjusted")
+ggsave("effect.450k.adj.png",width = 8,height = 6)
+
+PEpicAdj = inner_join(eurEPICadj,latEPICadj,by="MarkerName") %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Effect_eur_epic_adj, y=Effect_lat_epic_adj)) +
+  geom_point()+
+  geom_smooth()+
+  theme_bw()+
+  labs(x="Effect, eur",y="Effect, lat")+
+  ggtitle("effect sizes of eur and lat mqtls, on EPIC, adjusted")
+ggsave("effect.epic.adj.png",width = 8,height = 6)
+
+```
+
+```{r overlap of mqtls with deconvolution probes}
+setwd("/scratch/lishaobo/mqtl/results")
+library(data.table)
+library(tidyverse)
+library(FlowSorted.Blood.EPIC)
+
+mqtls <- read.table("mqtl.allcom.adj.txt",header=TRUE)
+idols = IDOLOptimizedCpGs.compTable %>%
+  as.data.frame() %>%
+  rownames_to_column(var="cpg")
+
+mqtlIdol = mqtls %>%
+  select(cpg, MarkerName, Effect, P, Direction) %>%
+  inner_join(idols, by="cpg") %>%
+  arrange(P)
+
+write.csv(mqtlIdol,"idolprobes_mqtls.csv")
+
+```
+
+# other analysis
+
+```{bash nominal down stream analysis for mqtl output}
+#mkdir qtloutput
+
+# Discover QTL in cis (nominal pass)
+
+set="set3"
+for race in "EUR" "LAT" ; do
+  for j in $(seq 1 100); do
+    QTLtools cis --vcf "${set}"."${race}".vcf.gz \
+     --bed "${set}"."${race}".sorted.bed.gz \
+     --cov "${set}"."${race}".cov \
+     --nominal 0.01 \
+     --chunk $j 100 \
+     --out qtloutput/nominals."${set}"."${race}".mqtl."${j}"_of_100.txt
+  done
+done
+
+# Combining results of all the output files
+cd /scratch/lishaobo/mqtl
+
+set="set3"
+for race in "EUR" "LAT" ; do
+  cat qtloutput/nominals."${set}"."${race}".mqtl.*_of_100.txt > nominals."${set}"."${race}".mqtl.txt
+done
+
+# create an ID for identification, create a column for sample size
+set="set3"
+for race in "EUR" "LAT" ; do
+  N=$(wc -l Subs."${set}"."${race}".txt | awk '{print $1}')
+  awk '{print $1"-"$8, $0}' nominals."${set}"."${race}".mqtl.txt |\
+  awk -v var=$N '{print $0, var}' > nominals."${set}"."${race}".mqtl.n.txt
+done
+
+####################################################################################
+# Downstream analysis for nominal pass
+# Meta-analysis of all races combined 
+
+cd /scratch/lishaobo/mqtl
+for set in "set1" "set2" "set3" "set4"; do
+  for race in "EUR" "LAT" ; do
+    awk 'NR!=1 {print $0}' /project/wiemels_260/sebastian/mqtl/qtloutput_permute/permute."${set}"."${race}".mqtl.n.txt > results/"${set}"."${race}".mqtl.txt
+    sed -i '1i ID phe_id phe_chr phe_from phe_to phe_strd n_var_in_cis dist_phe_var var_id var_chr var_from var_to dof1 dof2 bml1 bml2 nom_pval r_squared slope slope_se adj_emp_pval adj_beta_pval N' results/"${set}"."${race}".mqtl.txt
+  done
+done
+
+
+cd /scratch/lishaobo/mqtl/results
+
+  metal
+  MARKER ID
+  EFFECT slope
+  PVALUE adj_beta_pval
+  SCHEME STDERR
+  STDERR slope_se
+  WEIGHTLABEL N
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS set1.EUR.mqtl.txt
+  PROCESS set2.EUR.mqtl.txt
+  ANALYZE
+  QUIT
+  mv METAANALYSIS1.TBL mqtl.450K.eur.txt
+
+  metal
+  MARKER ID
+  EFFECT slope
+  PVALUE adj_beta_pval
+  SCHEME STDERR
+  STDERR slope_se
+  WEIGHTLABEL N
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS set1.LAT.mqtl.txt
+  PROCESS set2.LAT.mqtl.txt
+  ANALYZE
+  QUIT
+  mv METAANALYSIS1.TBL mqtl.450K.lat.txt
+
+  metal
+  MARKER ID
+  EFFECT slope
+  PVALUE adj_beta_pval
+  SCHEME STDERR
+  STDERR slope_se
+  WEIGHTLABEL N
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS set3.EUR.mqtl.txt
+  PROCESS set4.EUR.mqtl.txt
+  ANALYZE
+  QUIT
+  mv METAANALYSIS1.TBL mqtl.EPIC.eur.txt
+
+  metal
+  MARKER ID
+  EFFECT slope
+  PVALUE adj_beta_pval
+  SCHEME STDERR
+  STDERR slope_se
+  WEIGHTLABEL N
+  VERBOSE OFF
+  GENOMICCONTROL OFF
+  PROCESS set3.LAT.mqtl.txt
+  PROCESS set4.LAT.mqtl.txt
+  ANALYZE
+  QUIT
+  mv METAANALYSIS1.TBL mqtl.EPIC.lat.txt
+
+
+
+cd /scratch/lishaobo/mqtl/results
+
+## Combining all top hits together
+# mqtl.450K.eur.txt: 923961 mqtls
+# mqtl.450K.lat.txt: 929523 mqtls
+# mqtl.EPIC.eur.txt: 1677059 mqtls
+# mqtl.EPIC.lat.txt: 1498351 mqtls
+
+
+## Further analysis in RMD starting from Venn diagram
+
+#Using fdr correction for significant mqtls
+#  470941 mqtl.adj.450K.eur.txt
+#  471014 mqtl.adj.450K.lat.txt
+#  846073 mqtl.adj.EPIC.eur.txt
+#  846074 mqtl.adj.EPIC.lat.txt
+
+```
+
+```{r nominal visualization of p values}
+library(data.table)
+library(tidyverse)
+setwd("/scratch/lishaobo/mqtl")
+
+# A density plot of P values from meta-analysis
+qtl.data <- fread("mqtl.meta.weight.txt") 
+qtl.data.1 <- qtl.data %>%
+  mutate(pvalue = as.numeric(`P-value`)) %>%
+  select(MarkerName, pvalue) %>%
+  filter(pvalue < 0.00001) %>% # pvalue < 1e-150 because otherwise can't see much. But don't do it with log otherwise too much information will be lost
+  mutate(logP = -log(pvalue)) %>%
+  mutate(logP = ifelse(is.finite(logP),logP,max(logP)+1)) %>%
+  filter(is.finite(logP))
+
+chr <- qtl.data.1$MarkerName %>% 
+  gsub("^.*-","",.) %>%
+  gsub(":.*$","",.)
+qtl.data.1$chr <- chr
+
+qtl.data.1 %>%
+  ggplot(aes(x=pvalue)) +
+  geom_density()+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in meta-analysis")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlWeight.png",width = 8,height = 6)
+
+qtl.data.1 %>%
+  ggplot(aes(x=pvalue,fill=chr)) +
+  geom_density(alpha=0.1)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in meta-analysis by chromosome")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlWeightbychr1.png",width = 8,height = 6)
+
+qtl.data.1 %>%
+  arrange(chr) %>%
+  mutate(chr = factor(chr,levels=seq(1,22))) %>%
+  ggplot(aes(x=pvalue)) +
+  geom_density(alpha=0.3)+
+  facet_wrap(~chr, ncol=4)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in meta-analysis by chromosome")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlWeightbychr2.png")
+
+
+# Same figures, log transformation
+qtl.data.1 %>%
+  ggplot(aes(x=logP)) +
+  geom_density()+
+  theme_bw()+
+  ggtitle("Distribution of mQTL log p values in meta-analysis")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtloglWeight.png",width = 8,height = 6)
+
+qtl.data.1 %>%
+  ggplot(aes(x=logP,fill=chr)) +
+  geom_density(alpha=0.1)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL log p values in meta-analysis by chromosome")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtllogWeightbychr1.png",width = 8,height = 6)
+
+qtl.data.1 %>%
+  arrange(chr) %>%
+  mutate(chr = factor(chr,levels=seq(1,22))) %>%
+  ggplot(aes(x=logP)) +
+  geom_density(alpha=0.3)+
+  facet_wrap(~chr, ncol=4)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL log p values in meta-analysis by chromosome")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtllogWeightbychr2.png")
+
+
+# A density plot of P values from each subgroup
+qtl.com <- fread("pvals.combined.set1.txt")
+colnames(qtl.com) <- c("pvalue","chr","race")
+qtl.com%>%
+  ggplot(aes(x=pvalue,fill=chr))+
+  geom_density(alpha=0.3)+
+  facet_wrap(~race, ncol=2)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in Set 1 by race")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlPvalSet1.png",width = 8,height = 6)
+rm(list = ls())
+
+qtl.com <- fread("pvals.combined.set2.txt")
+colnames(qtl.com) <- c("pvalue","chr","race")
+qtl.com%>%
+  ggplot(aes(x=pvalue,fill=chr))+
+  geom_density(alpha=0.3)+
+  facet_wrap(~race, ncol=2)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in Set 2 by race")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlPvalSet2.png",width = 8,height = 6)
+rm(list = ls())
+
+qtl.com <- fread("pvals.combined.set3.txt")
+colnames(qtl.com) <- c("pvalue","chr","race")
+qtl.com%>%
+  ggplot(aes(x=pvalue,fill=chr))+
+  geom_density(alpha=0.3)+
+  facet_wrap(~race, ncol=2)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in Set 3 by race")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlPvalSet3.png",width = 8,height = 6)
+rm(list = ls())
+
+qtl.com <- fread("pvals.combined.set4.txt")
+colnames(qtl.com) <- c("pvalue","chr","race")
+qtl.com%>%
+  ggplot(aes(x=pvalue,fill=chr))+
+  geom_density(alpha=0.3)+
+  facet_wrap(~race, ncol=2)+
+  theme_bw()+
+  ggtitle("Distribution of mQTL p values in Set 4 by race")+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("mqtlPvalSet4.png",width = 8,height = 6)
+rm(list = ls())
+
+```
+
+```{r nominal further mQTL selection process}
+setwd("/scratch/lishaobo/mqtl")
+library(data.table)
+library(tidyverse)
+library(qvalue)
+
+for(race in c("eur","lat")){
+  for(chr in c(1:22)){
+    all <- fread(paste0("mqtl.sz.",race,".chr",chr,".txt")) %>%
+      as.data.frame() %>%
+      dplyr::rename('P' = "P-value") %>%
+      dplyr::select(-Allele1, -Allele2,-Weight) %>%
+      dplyr::mutate(cpg = gsub("-.*$","",MarkerName)) %>%
+      dplyr::arrange(cpg,P) %>%
+      dplyr::distinct(cpg,.keep_all = TRUE) %>%
+      dplyr::filter(P<0.05 & P >=0)
+    
+    all_anno <- all %>%
+      dplyr::mutate(SNPID = gsub("^.*-","",MarkerName)) %>%
+      separate(SNPID, c("CHROM","POS","REF","ALT")) %>%
+      arrange(CHROM,POS)
+    
+    
+    all_anno_adj <- all_anno %>%
+      dplyr::mutate(adjP= p.adjust(P,method ="fdr"))%>%
+      dplyr::filter(adjP<0.05)
+    
+    write.table(all_anno, paste0("results/",race,".chr",chr,".mqtl.txt"),
+                sep="\t",quote=FALSE,row.names = FALSE)
+    write.table(all_anno_adj, paste0("results/adj/",race,".chr",chr,".adj.mqtl.txt"),
+                sep="\t",quote=FALSE,row.names = FALSE)
+  }
+}
+```
+
+```{r nominal calculation of overlap between EUR and LAT, adjusted and unadjusted}
+setwd("/scratch/lishaobo/mqtl")
+library(data.table)
+library(tidyverse)
+library(VennDiagram)
+
+eur <- read.table("results/eur.mqtl.combined.txt",header=TRUE)
+lat <- read.table("results/lat.mqtl.combined.txt",header=TRUE)
+
+venn.diagram(
+  x = list(eur$MarkerName,lat$MarkerName),
+  category.names = c("EUR" , "LAT"),
+  filename = 'mqtl.venn.png',
+  output=TRUE,
+  fill = c("aliceblue","lightpink")
+)
+
+eura <- read.table("results/adj/lat.mqtl.adj.combined.txt",header=TRUE)
+lata <- read.table("results/adj/eur.mqtl.adj.combined.txt",header=TRUE)
+
+venn.diagram(
+  x = list(eura$MarkerName,lata$MarkerName),
+  category.names = c("EUR.adj" , "LAT.adj"),
+  filename = 'mqtl.adj.venn.png',
+  output=TRUE,
+  fill = c("aliceblue","lightpink")
+)
+```
+
+```{r nominal distribution across genome}
+setwd("/scratch/lishaobo/mqtl")
+library(data.table)
+library(tidyverse)
+
+eur <- read.table("results/eur.mqtl.combined.txt",header=TRUE)
+lat <- read.table("results/lat.mqtl.combined.txt",header=TRUE)
+
+table(eur$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in EUR")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distributionEUR.png")
+
+
+table(lat$CHROM) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Var1,y=Freq))+
+  theme_classic() +
+  ggtitle("Distribution of mQTLs across the genome in LAT")+
+  xlab("Chromosome") +
+  ylab("Number of mQTLs") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_bar(stat="identity")
+ggsave("distributionLAT.png")
+
+```
+
+

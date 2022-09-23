@@ -1,0 +1,1918 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: To investigate whether germline mitochondria SNPs contribute to high grade glioma risks.
+
+This paper has been published: 
+Shaobo Li et al, Mitochondrial 1555 G>A variant as a potential risk factor for childhood glioblastoma
+DOI: https://doi.org/10.1093/noajnl/vdac045
+
+
+# comparing MT SNPs in case/control subjects
+
+```{bash  Data preparation and missingness}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+# saxb4_incl_4 changed on 01/25 for glioma_eur_meta project
+## to recreate saxb4_incl_4, follow glioma_1202 RMD instead
+plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_incl_4\
+  --chr MT\
+  --make-bed\
+  --out saxb4.mt
+
+# select based on 
+for race in "EUR" "LAT" "AFR" "EAS"; do
+  plink --bfile saxb4.mt\
+    --keep /scratch/lishaobo/GWAS/glioma/saxb4/${race}_ids.txt\
+    --make-bed\
+    --out saxb4.mt.$race
+done
+
+```
+
+```{bash execution of GWAS}
+
+# Without genetic PCs
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+for race in "EUR" "LAT" "AFR" "EAS"; do
+
+  awk '{print $1, $1":"$4":"$5":"$6, $3,$4, $5, $6}' saxb4.mt.$race.bim > saxb4.mt.$race.updated.bim
+  mv saxb4.mt.$race.updated.bim saxb4.mt.$race.bim
+  
+  plink2 --bfile saxb4.mt.$race\
+    --hwe midp 1e-4\
+    --keep-if PHENO1 == control \
+    --make-bed\
+    --out saxb4.mt.${race}_1\
+    --threads 200
+
+  plink2 --bfile saxb4.mt.$race\
+    --make-bed\
+    --extract saxb4.mt.${race}_1.bim\
+    --out saxb4.mt.${race}_2\
+    --threads 200
+
+  plink2 --bfile saxb4.mt.${race}_2\
+    --threads 200\
+    --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+    --out saxb4.${race}
+    
+done
+
+# genetic PCs included
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+for race in "EUR" "LAT" "AFR" "EAS"; do
+
+plink2 --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+  --maf 0.1\
+  --indep-pairwise 50 10 0.1\
+  --out saxb4."${race}".pruned
+    
+plink2 --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+  --extract saxb4."${race}".pruned.prune.in\
+  --pca 10\
+  --out saxb4."${race}".pca\
+  --threads 200
+
+plink2 --bfile saxb4.mt.${race}_2\
+  --covar saxb4."${race}".pca.eigenvec\
+  --threads 200\
+  --glm hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+  --out saxb4.${race}.controls
+    
+done
+
+```
+
+```{bash meta-analysis for MT}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.EUR.PHENO1.glm.logistic
+PROCESS saxb4.LAT.PHENO1.glm.logistic
+PROCESS saxb4.AFR.PHENO1.glm.logistic
+PROCESS saxb4.EAS.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL overall_meta_saxb4_glm.TBL
+mv METAANALYSIS1.TBL.info overall_meta_saxb4_glm.TBL.info
+
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.EUR.controls.PHENO1.glm.logistic
+PROCESS saxb4.LAT.controls.PHENO1.glm.logistic
+PROCESS saxb4.AFR.controls.PHENO1.glm.logistic
+PROCESS saxb4.EAS.controls.PHENO1.glm.logistic
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL overall_meta_saxb4_controls.glm.TBL
+mv METAANALYSIS1.TBL.info overall_meta_saxb4_controls.glm.TBL.info
+
+```
+
+```{r visualization}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+files =c("saxb4.EUR.PHENO1.glm.logistic",
+         "saxb4.LAT.PHENO1.glm.logistic",
+         "saxb4.AFR.PHENO1.glm.logistic",
+         "saxb4.EAS.PHENO1.glm.logistic",
+         "overall_meta_saxb4_glm.TBL",
+         "saxb4.EUR.controls.PHENO1.glm.logistic",
+         "saxb4.LAT.controls.PHENO1.glm.logistic",
+         "saxb4.AFR.controls.PHENO1.glm.logistic",
+         "saxb4.EAS.controls.PHENO1.glm.logistic",
+         "overall_meta_saxb4_controls.glm.TBL")
+
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) 
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = "MT", POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      na.omit()%>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.character(`#CHROM`), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]%>%
+    mutate(logP=-log10(P))
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  gwas_data_1 %>%
+    ggplot(aes(x=POS,y=P))+
+    geom_point()+
+    theme_bw()+
+    labs(x="SNPs on MT",y="P value")+
+    ggtitle(paste0("MT SNPs in glioma cases and controls ",filename))+
+    theme(plot.title = element_text(hjust = 0.5))
+ggsave(paste0("mtGliomacaco",filename,".png"),width = 8,height = 6)
+
+  gwas_data_1 %>%
+    ggplot(aes(x=POS,y=logP))+
+    geom_point()+
+    theme_bw()+
+    labs(x="SNPs on MT",y="- log P value")+
+    ggtitle(paste0("MT SNPs in glioma cases and controls ",filename))+
+    theme(plot.title = element_text(hjust = 0.5))
+ggsave(paste0("logPmtGliomacaco",filename,".png"),width = 8,height = 6)
+
+}
+
+# [1] "lambda value of saxb4.EUR.PHENO1.glm.logistic is: 0.969234815199078"
+# [1] "lambda value of saxb4.LAT.PHENO1.glm.logistic is: 0.856549687968349"
+# [1] "lambda value of saxb4.AFR.PHENO1.glm.logistic is: 0.953022700603124"
+# [1] "lambda value of saxb4.EAS.PHENO1.glm.logistic is: 0.555730376388247"
+# [1] "lambda value of overall_meta_saxb4_glm.TBL is: 0.910654991891427"
+# [1] "lambda value of saxb4.EUR.controls.PHENO1.glm.logistic is: 1.06591779149991"
+# [1] "lambda value of saxb4.LAT.controls.PHENO1.glm.logistic is: 0.880435141776341"
+# [1] "lambda value of saxb4.AFR.controls.PHENO1.glm.logistic is: 1.08348103062586"
+# [1] "lambda value of saxb4.EAS.controls.PHENO1.glm.logistic is: 0.634268641692168"
+# [1] "lambda value of overall_meta_saxb4_controls.glm.TBL is: 1.05326084586272"
+
+```  
+
+
+# comparing MT SNPs in subtypes
+
+```{bash  Data preparation and missingness}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_incl_4\
+  --chr MT\
+  --make-bed\
+  --out saxb4.mt
+
+# select based on 
+for race in "EUR" "LAT" "AFR" "EAS"; do
+  plink --bfile saxb4.mt\
+    --keep /scratch/lishaobo/GWAS/glioma/saxb4/${race}_ids.txt\
+    --make-bed\
+    --out saxb4.mt.$race
+done
+```
+
+```{r selecting high grade subjects}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(tidyverse)
+library(data.table)
+
+# selecting  9440 (Glioblastoma) glb (maybe also including 9441 and 9442) and Astrocytoma (ast)
+
+# raw = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+#   dplyr::filter(phenotype==1 | HISTO_T3 %in% c(9440,9441,9442) | (HISTO_T3 >= 9400 & HISTO_T3 <= 9424 ) ) %>%
+#   dplyr::select(FID,IID)
+
+raw.gbm = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+  dplyr::filter(phenotype==1 | HISTO_T3 ==9440 ) %>%
+  dplyr::select(FID,IID)
+
+write.table(raw.gbm, "gbm.9440.ids.txt",sep="\t",quote=FALSE,col.names=FALSE, row.names = FALSE)
+
+raw.pol = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+  dplyr::filter(phenotype==1 | HISTO_T3 ==9421 ) %>%
+  dplyr::select(FID,IID)
+
+write.table(raw.pol, "pol.9421.ids.txt",sep="\t",quote=FALSE,col.names=FALSE, row.names = FALSE)
+
+raw.non.pol = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+  dplyr::filter(phenotype==1 | (HISTO_T3 >= 9400 & HISTO_T3 <= 9424  & HISTO_T3 != 9421) ) %>%
+  dplyr::select(FID,IID)
+
+write.table(raw.non.pol, "non.pol.ast.ids.txt",sep="\t",quote=FALSE,col.names=FALSE, row.names = FALSE)
+
+raw.olg = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+  dplyr::filter(phenotype==1 | (HISTO_T3 >= 9450 & HISTO_T3 <= 9451) ) %>%
+  dplyr::select(FID,IID)
+
+write.table(raw.olg, "olg.ids.txt",sep="\t",quote=FALSE,col.names=FALSE, row.names = FALSE)
+
+```
+
+```{r table 1: clinical variables}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(tidyverse)
+library(data.table)
+
+# all available subjects
+eur = fread("/scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_EUR.fam") %>%
+  mutate(IID=V2, sex=V5,caco=V6,race="eur") %>%
+  dplyr::select(IID,sex,caco,race)
+
+lat = fread("/scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_LAT.fam") %>%
+  mutate(IID=V2, sex=V5,caco=V6,race="lat")%>%
+  dplyr::select(IID,sex,caco,race)
+
+all.subs = rbind(eur,lat) %>% as.data.frame()
+
+raw.gbm = fread("/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt") %>%
+  dplyr::select(IID,subjectId) %>%
+  inner_join(all.subs,by="IID") 
+
+clinicals = read.csv("/project/wiemels_260/sebastian/gwas_glioma/raw_data/likereallyraw/PedGlioma_4869_Full_Covariates_uncript.csv")  %>%
+  mutate(sub=ifelse(HISTO_T3 ==9440 ,"gbm", 
+                    ifelse(HISTO_T3 ==9421, "ply",
+                           ifelse( (HISTO_T3 >= 9400 & HISTO_T3 <= 9424  & HISTO_T3 != 9421), "ast",
+                                   ifelse( (HISTO_T3 >= 9450 & HISTO_T3 <= 9451), "olg", "NA" ))))) %>%
+  dplyr::select(blindid,BTHTYPE,BTHORDER,BTHWGT,BTHTYPE,YRS_ED_MOM,GESTATION,sub,HISTO_T3,SITE_02) %>%
+  mutate(GESTATION=ifelse((GESTATION==999|GESTATION<100),NA,GESTATION))%>%
+  right_join(raw.gbm,by=c("blindid"="subjectId"))
+
+# not many useful stuff from medulla controls
+# medulla <- read.csv("/project/wiemels_260/sebastian/gwas_glioma/raw_data/likereallyraw/medulla.csv") %>%
+#   as.data.frame() 
+#   blindid    CaCo case_status YRBIRTH SEX RACE08
+# 1  854026    Case           1    1989   M  White
+# 2  174491 Control           0    1989   M  White
+
+
+## sex
+table(clinicals$caco,clinicals$sex)
+fisher.test(x=table(clinicals$sex,clinicals$caco), alternative = "two.sided")
+
+## subtype
+table(clinicals$caco,clinicals$sub)
+
+## race
+table(clinicals$caco,clinicals$race)
+fisher.test(x=table(clinicals$race,clinicals$caco), alternative = "two.sided")
+
+## gest
+a1=clinicals %>% filter(caco==1) %>% dplyr::select(GESTATION) 
+a1 %>% summary
+sd(a1$GESTATION,na.rm = TRUE)
+
+a2 = clinicals %>% filter(caco==2) %>% dplyr::select(GESTATION)  
+a2 %>% summary
+sd(a2$GESTATION,na.rm = TRUE)
+lm(GESTATION~caco,data=clinicals) %>% summary
+
+## BTHWGT
+a1=clinicals %>% filter(caco==1) %>% dplyr::select(BTHWGT) 
+a1 %>% summary
+sd(a1$BTHWGT,na.rm = TRUE)
+
+a2 = clinicals %>% filter(caco==2) %>% dplyr::select(BTHWGT)  
+a2 %>% summary
+sd(a2$BTHWGT,na.rm = TRUE)
+lm(BTHWGT~caco,data=clinicals) %>% summary
+
+#### by subtype
+clinicals1 = clinicals  %>%
+  filter(!is.na(sub))%>%
+  filter(sub!="NA")
+
+table(clinicals1$sub,clinicals1$sex)
+table(clinicals1$sub,clinicals1$race)
+
+cs=table(clinicals1$sub,clinicals1$SITE_02,useNA = "always")
+write.csv(cs,"sub.site.csv")
+
+## gest
+a1=clinicals1 %>% filter(sub=="ply") %>% dplyr::select(GESTATION) 
+a1 %>% summary
+sd(a1$GESTATION,na.rm = TRUE)
+
+a2=clinicals1 %>% filter(sub=="ast") %>% dplyr::select(GESTATION) 
+a2 %>% summary
+sd(a2$GESTATION,na.rm = TRUE)
+
+a3=clinicals1 %>% filter(sub=="gbm") %>% dplyr::select(GESTATION) 
+a3 %>% summary
+sd(a3$GESTATION,na.rm = TRUE)
+
+a4=clinicals1 %>% filter(sub=="olg") %>% dplyr::select(GESTATION) 
+a4 %>% summary
+sd(a4$GESTATION,na.rm = TRUE)
+
+## BTHWGT
+a1=clinicals1 %>% filter(sub=="ply") %>% dplyr::select(BTHWGT) 
+a1 %>% summary
+sd(a1$BTHWGT,na.rm = TRUE)
+
+a2=clinicals1 %>% filter(sub=="ast") %>% dplyr::select(BTHWGT) 
+a2 %>% summary
+sd(a2$BTHWGT,na.rm = TRUE)
+
+a3=clinicals1 %>% filter(sub=="gbm") %>% dplyr::select(BTHWGT) 
+a3 %>% summary
+sd(a3$BTHWGT,na.rm = TRUE)
+
+a4=clinicals1 %>% filter(sub=="olg") %>% dplyr::select(BTHWGT) 
+a4 %>% summary
+sd(a4$BTHWGT,na.rm = TRUE)
+
+```
+
+```{bash high GBM regression}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+#for race in "EUR" "LAT" "AFR" "EAS"; do
+for race in "EUR" "LAT"; do
+  plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+    --keep gbm.9440.ids.txt\
+    --make-bed\
+    --out saxb4.gbm.$race
+
+  plink --bfile saxb4.mt.${race}_2\
+    --keep gbm.9440.ids.txt\
+    --make-bed\
+    --out saxb4.gbm.mt.$race
+
+  plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+    --keep pol.9421.ids.txt\
+    --make-bed\
+    --out saxb4.pol.$race
+
+  plink --bfile saxb4.mt.${race}_2\
+    --keep pol.9421.ids.txt\
+    --make-bed\
+    --out saxb4.pol.mt.$race
+
+  plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+    --keep non.pol.ast.ids.txt\
+    --make-bed\
+    --out saxb4.non.pol.$race
+
+  plink --bfile saxb4.mt.${race}_2\
+    --keep non.pol.ast.ids.txt\
+    --make-bed\
+    --out saxb4.non.pol.mt.$race
+
+  plink --bfile /scratch/lishaobo/GWAS/glioma/saxb4/saxb4_11_$race\
+    --keep olg.ids.txt\
+    --make-bed\
+    --out saxb4.olg.$race
+
+  plink --bfile saxb4.mt.${race}_2\
+    --keep olg.ids.txt\
+    --make-bed\
+    --out saxb4.olg.mt.$race
+done
+
+## Eur, gbm
+# 675 variants and 1477 people pass filters and QC.
+# Among remaining phenotypes, 46 are cases and 1431 are controls.
+## Lat, gbm
+# 675 variants and 1402 people pass filters and QC.
+# Among remaining phenotypes, 44 are cases and 1358 are controls.
+## Afr, gbm
+#675 variants and 200 people pass filters and QC.
+#Among remaining phenotypes, 4 are cases and 196 are controls.
+## Eas, gbm
+#764144 variants and 188 people pass filters and QC.
+#Among remaining phenotypes, 6 are cases and 182 are controls.
+
+## Eur, pol
+# 675 variants and 1886 people pass filters and QC.
+# Among remaining phenotypes, 455 are cases and 1431 are controls.
+## Lat, pol
+# 675 variants and 1690 people pass filters and QC.
+# Among remaining phenotypes, 332 are cases and 1358 are controls.
+
+## Eur, ast
+# 675 variants and 1760 people pass filters and QC.
+# Among remaining phenotypes, 329 are cases and 1431 are controls.
+## Lat, ast
+# 675 variants and 1621 people pass filters and QC.
+# Among remaining phenotypes, 263 are cases and 1358 are controls.
+
+## Eur, olg
+# 675 variants and 1478 people pass filters and QC.
+# Among remaining phenotypes, 47 are cases and 1431 are controls.
+## Lat, olg
+# 675 variants and 1386 people pass filters and QC.
+# Among remaining phenotypes, 28 are cases and 1358 are controls.
+
+# for race in "EUR" "LAT" "AFR" "EAS"; do
+for race in "EUR" "LAT"; do
+  for sub in "gbm" "pol" "non.pol" "olg"; do
+  
+  plink2 --bfile saxb4.$sub.$race\
+    --maf 0.1\
+    --indep-pairwise 50 10 0.1\
+    --out saxb4.$sub.$race.pruned
+      
+  plink2 --bfile saxb4.$sub.$race\
+    --extract saxb4.$sub.$race.pruned.prune.in\
+    --pca 10\
+    --out saxb4.$sub.$race.pca\
+    --threads 200
+  
+  plink2 --bfile saxb4.$sub.mt.$race\
+    --covar saxb4.$sub.$race.pca.eigenvec\
+    --threads 200\
+    --glm firth-fallback hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+    --out saxb4.$sub.$race
+  done    
+done
+
+# output coefficients for mt1555
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+    echo saxb4.$sub.$race.PHENO1.glm.logistic.hybrid
+    grep '26:1555:' saxb4.$sub.$race.PHENO1.glm.logistic.hybrid
+  done
+done  
+
+#r code
+ll=exp(beta-1.96*se)
+ul=exp(beta+1.96*se)
+print(paste0(round(ll,2),"-",round(ul,2)))
+
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+#saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	2	1	0.00203528	0.0434783	0.00070028	1474	4.58837	1.27642	0.000324742
+#saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	1	3	0.00285919	0.0227273	0.00221402	1399	2.29545	1.20663	0.0571233
+
+#saxb4.pol.EUR.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	1	0.000531067	0	0.00070028	1883	0.00314848	2.31422	0.998914
+#saxb4.pol.LAT.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	3	0.0017783	0	0.00221402	1687	-0.540137	1.75273	0.757954
+
+#saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	1	0.000569152	0	0.00070028	1757	0.430105	2.31909	0.852866
+#saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	3	0.00185414	0	0.00221402	1618	-0.289633	1.75488	0.868909
+
+#saxb4.olg.EUR.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	1	0.000677966	0	0.00070028	1475	2.59446	2.34358	0.268274
+#saxb4.olg.LAT.PHENO1.glm.logistic.hybrid
+#MT	1555	26:1555:G:A	A	G	G	0	3	0.0021692	0	0.00221402	1383	1.7125	1.78435	0.337189
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+# find significance level for this
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  # for race in "EUR" "LAT" "AFR" "EAS"; do
+  for race in "EUR" "LAT"; do
+  
+    plink2 --bfile saxb4.$sub.mt.$race\
+        --indep-pairwise 50 10 0.1
+    echo $race.$sub.mt.prune
+    
+  done
+done  
+
+#EUR.gbm.mt.prune
+#408/675 variants removed.
+#LAT.gbm.mt.prune
+#389/675 variants removed.
+#AFR.gbm.mt.prune
+# 532/675 variants removed.
+#EAS.gbm.mt.prune
+# 525/675 variants removed.
+
+#EUR.pol.mt.prune
+#379/675 variants removed.
+#LAT.pol.mt.prune
+#382/675 variants removed.
+
+#EUR.non.pol.mt.prune
+#396/675 variants removed.
+#LAT.non.pol.mt.prune
+#386/675 variants removed.
+
+#saxb4.olg.mt.EUR.fam.
+#408/675 variants removed.
+#LAT.olg.mt.prune
+#387/675 variants removed.
+```
+
+```{bash meta-analysis for MT}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mt.meta.saxb4.gbm.glm.TBL
+
+sort -k4,4n mt.meta.saxb4.gbm.glm.TBL | head -2
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			3.3775	0.8769	0.0001172	++	41.3	1.7040.1918
+
+#r code
+ll=exp(beta-1.96*se)
+ul=exp(beta+1.96*se)
+print(paste0(round(ll,2),"-",round(ul,2)))
+
+grep "26:1555:" saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	2	1	0.00203528	0.0434783	0.00070028	1474	4.58837	1.27642	0.000324742
+grep "26:1555:" saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	1	3	0.00285919	0.0227273	0.00221402	1399	2.29545	1.20663	0.0571233
+grep "26:1555:" mt.meta.saxb4.gbm.glm.TBL
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			3.3775	0.8769	0.0001172	++	41.3	1.704	1	0.1918
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.gbm.AFR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.gbm.EAS.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mt.4race.meta.saxb4.gbm.glm.TBL
+
+sort -k4,4n mt.4race.meta.saxb4.gbm.glm.TBL | head -2
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			3.3775	0.8769	0.0001172	++??	41.3	1.704	1	0.1918
+
+############################################################
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.pol.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.pol.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mt.meta.saxb4.pol.glm.TBL
+
+sort -k4,4n mt.meta.saxb4.pol.glm.TBL | head
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:2706:A:G			0.3722	0.0964	0.0001126	+-	77.8	4.506	1	0.03378
+#26:4216:C:T			-0.4223	0.1290	0.00106	--	0.0	0.000	1	0.9966
+
+grep "26:1555:" saxb4.pol.EUR.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	1	0.000531067	0	0.00070028	1883	0.0031484 2.31422	0.998914
+grep "26:1555:" saxb4.pol.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	3	0.0017783	0	0.00221402	1687	-0.540137 1.75273	0.757954
+grep "26:1555:" mt.meta.saxb4.pol.glm.TBL
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			-0.3421	1.3972	0.8066	+-	0.0	0.035	1	0.8515
+
+############################################################
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mt.meta.saxb4.non.pol.glm.TBL
+
+sort -k4,4n mt.meta.saxb4.non.pol.glm.TBL | head
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:10398:G:A			-0.3296	0.1107	0.002896	--	0.0	0.269	1	0.6043
+#26:3666:A:G			1.1639	0.4223	0.005855	++	0.0	0.657	1	0.4178
+
+
+grep "26:1555:" saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	1	0.000569152	0	0.00070028	1757	0.430105	2.31909	0.852866
+grep "26:1555:" saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	3	0.00185414	0	0.00221402	1618	-0.289633 1.75488	0.868909
+grep "26:1555:" mt.meta.saxb4.non.pol.glm.TBL
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			-0.0276	1.3994	0.9843	+-	0.0	0.061	1	0.8045
+
+############################################################
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.olg.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.olg.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mt.meta.saxb4.olg.glm.TBL
+
+sort -k4,4n mt.meta.saxb4.olg.glm.TBL | head
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:16465:T:C			2.9900	0.8278	0.0003037	++	48.2	1.932	1	0.1646
+#26:13651:G:A			3.9451	1.2591	0.001728	++	0.0	0.515	1	0.4732
+
+grep "26:1555:" saxb4.olg.EUR.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	1	0.000677966	0	0.00070028	1475	2.59446	2.34358	0.268274
+grep "26:1555:" saxb4.olg.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# MT	1555	26:1555:G:A	A	G	G	0	3	0.0021692	0	0.00221402	1383	1.7125	1.78435	0.337189
+grep "26:1555:" mt.meta.saxb4.olg.glm.TBL
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#26:1555:G:A			2.0362	1.4197	0.1515	++	0.0	0.090	1	0.7646
+```
+
+```{r visualization}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+# files =c("saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid",
+#          "saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid",
+#          "mt.meta.saxb4.gbm.glm.TBL",
+#          "saxb4.pol.EUR.PHENO1.glm.logistic.hybrid",
+#          "saxb4.pol.LAT.PHENO1.glm.logistic.hybrid",
+#          "mt.meta.saxb4.pol.glm.TBL",
+#          "saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid",
+#          "saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid",
+#          "mt.meta.saxb4.non.pol.glm.TBL",
+#          "saxb4.olg.EUR.PHENO1.glm.logistic.hybrid",
+#          "saxb4.olg.LAT.PHENO1.glm.logistic.hybrid",
+#          "mt.meta.saxb4.olg.glm.TBL")
+
+files =c("saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid",
+         "saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid",
+         "mt.meta.saxb4.gbm.glm.TBL")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) 
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = "MT", POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      na.omit()%>%
+      dplyr::mutate(P= as.numeric(as.character(P)),CHROM = as.character(`#CHROM`), POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]%>%
+    mutate(logP=-log10(P))
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  if(i=="saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid") testN= 675-408
+  if(i=="saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid") testN= 675-389
+  if(i=="mt.meta.saxb4.gbm.glm.TBL") testN=((675-408)+(675-389))/2
+  if(i=="saxb4.pol.EUR.PHENO1.glm.logistic.hybrid") testN=675-379
+  if(i=="saxb4.pol.LAT.PHENO1.glm.logistic.hybrid") testN=675-382
+  if(i=="mt.meta.saxb4.pol.glm.TBL") testN=((675-379)+(675-382))/2
+  if(i=="saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid") testN=675-396
+  if(i=="saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid") testN=675-386
+  if(i=="mt.meta.saxb4.non.pol.glm.TBL") testN=((675-396)+(675-386))/2
+  if(i=="saxb4.olg.EUR.PHENO1.glm.logistic.hybrid") testN=675-408
+  if(i=="saxb4.olg.LAT.PHENO1.glm.logistic.hybrid") testN=675-387
+  if(i=="mt.meta.saxb4.olg.glm.TBL") testN=((675-408)+(675-387))/2
+
+  gwas_data_1 %>%
+    ggplot(aes(x=POS,y=logP))+
+    geom_point()+
+    theme_bw()+
+    geom_hline(yintercept = -log10(0.05/testN), colour="red",alpha=0.5)+
+    labs(x="SNPs on MT",
+         y=expression(-log[10](p)))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=15),
+          axis.title.y = element_text(size=15))
+ggsave(paste0("logPmtGliomacaco.",filename,".png"),width = 8,height = 6)
+
+}
+
+#[1] "lambda value of saxb4.gbm.EUR.PHENO1.glm.logistic.hybrid is: 1.22658964638743"
+#[1] "lambda value of saxb4.gbm.LAT.PHENO1.glm.logistic.hybrid is: 1.0461930518544"
+#[1] "lambda value of mt.meta.saxb4.gbm.glm.TBL is: 1.58830261439909"
+#[1] "lambda value of saxb4.pol.EUR.PHENO1.glm.logistic.hybrid is: 0.72521590436925"
+#[1] "lambda value of saxb4.pol.LAT.PHENO1.glm.logistic.hybrid is: 0.555689903168125"
+#[1] "lambda value of mt.meta.saxb4.pol.glm.TBL is: 0.680626798309361"
+#[1] "lambda value of saxb4.non.pol.EUR.PHENO1.glm.logistic.hybrid is: 0.717342107129914"
+#[1] "lambda value of saxb4.non.pol.LAT.PHENO1.glm.logistic.hybrid is: 0.46386864432172"
+#[1] "lambda value of mt.meta.saxb4.non.pol.glm.TBL is: 0.659020621988696"
+#[1] "lambda value of saxb4.olg.EUR.PHENO1.glm.logistic.hybrid is: 1.33029484568399"
+#[1] "lambda value of saxb4.olg.LAT.PHENO1.glm.logistic.hybrid is: 1.46626771511188"
+#[1] "lambda value of mt.meta.saxb4.olg.glm.TBL is: 2.30331526428493"
+
+```  
+
+# visualize number of variants in cases and controls
+
+```{bash extract one variant}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+nano 1555SNP.txt
+#26:1555:G:A
+
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+  plink --bfile saxb4.$sub.mt.$race\
+    --extract 1555SNP.txt\
+    --recode vcf\
+    --out 1555Inds.$sub.$race
+  done
+done
+
+```
+
+```{bash haplotype analysis}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+    plink2 --bfile saxb4.$sub.mt.$race\
+      --recode vcf bgz\
+      --out mt.$sub.$race
+  done
+done
+
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+    haplogrep classify --in mt.$sub.$race.vcf.gz --format vcf --out haplo.$sub.$race.txt
+  done
+done
+```
+
+```{r extract genotypes, haplotype, and compare}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(vcfR)
+library(tidyverse)
+library(data.table)
+library(questionr)
+
+for(race in c("EUR","LAT")){
+  for(sub in c("gbm","pol","non.pol","olg")){
+    
+    vcfR = read.vcfR(paste0("1555Inds.",sub,".",race,".vcf"))
+  
+    fam = fread(paste0("saxb4.",sub,".mt.",race,".fam"))%>%
+      mutate(Indiv = paste0(V1,"_",V2),
+             caco = V6) %>%
+      select(Indiv,caco)
+    
+    vcf_tidy <-vcfR2tidy(vcfR, dot_is_NA=TRUE, single_frame=TRUE)
+
+    vcf_data <- vcf_tidy$dat %>% 
+      as.data.frame%>%
+      select(Indiv, gt_GT_alleles)%>%
+      left_join(fam, by="Indiv")
+  
+    a = table(vcf_data$gt_GT_alleles,vcf_data$caco)
+
+    print(paste0("genotypes for ",sub," in ",race))
+    print(odds.ratio(a))
+    print(table(vcf_data$gt_GT_alleles,vcf_data$caco, useNA = "always"))
+
+# [1] "genotypes for gbm in EUR"
+#          1    2
+#   A/A 1427   44
+#   G/G    1    2
+# 
+# [1] "genotypes for gbm in LAT"
+#          1    2
+#   A/A 1352   43
+#   G/G    3    1
+# 
+# [1] "genotypes for pol in EUR"
+#          1    2
+#   A/A 1427  455
+#   G/G    1    0
+#   
+# [1] "genotypes for pol in LAT"
+#          1    2
+#   A/A 1352  332
+#   G/G    3    0
+# 
+# [1] "genotypes for non.pol in EUR"
+#          1    2
+#   A/A 1427  329
+#   G/G    1    0
+#   
+# [1] "genotypes for non.pol in LAT"
+#          1    2
+#   A/A 1352  263
+#   G/G    3    0  
+# 
+# [1] "genotypes for olg in EUR"
+#          1    2
+#   A/A 1427   47
+#   G/G    1    0
+#   
+# [1] "genotypes for olg in LAT"
+#          1    2
+#   A/A 1352   28
+#   G/G    3    0
+
+#M <- matrix(c(2779,4,87,3), ncol = 2)
+#odds.ratio(M)
+        
+####################
+# haplotype analysis
+    
+    hap = fread(paste0("haplo.",sub,".",race,".txt")) %>%
+      select(SampleID,Haplogroup)
+    
+    phe = fread(paste0("saxb4.",sub,".mt.",race,".fam"))%>%
+      select(V2,V6) %>%
+      dplyr::rename("SampleID"="V2",
+                    "caco" = "V6") %>%
+      inner_join(hap,by="SampleID")
+    
+    a = table(phe$caco, phe$Haplogroup) 
+    haps = colnames(a)
+    
+    hap.sum = data.frame(control = a[1,], case = a[2,])
+    rownames(hap.sum) = haps
+    
+    haps.case = hap.sum %>%
+      filter(case!=0)
+    
+    vcf_1 = vcf_data %>%
+      dplyr::mutate(SampleID=gsub("^0_","",Indiv)) %>%
+      select(-caco, -Indiv) %>%
+      filter(gt_GT_alleles == "G/G" ) %>%
+      left_join(phe, by="SampleID") 
+      
+    write.csv(hap.sum, paste0(sub,".",race,".haps.all.csv"))
+    write.csv(haps.case, paste0(sub,".",race,".haps.w.cases.csv"))
+    write.csv(vcf_1, paste0(sub,".",race,".gg.haps.csv"))
+
+  }
+}
+
+
+####################
+# haplotype analysis after traversing up
+for(race in c("EUR","LAT")){
+  
+  j=1
+  hap.sum.sum = list()
+  full.list = data.frame(hapo_traverse=c("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K","L0", "L1", "L2", "L3", "L4", "M", "N", "P", "Q", "R", "T", "U", "V", "W", "X", "Z" ))
+  
+  for(sub in c("gbm","pol","non.pol","olg")){
+  #sub="gbm"
+  hap = fread(paste0("haplo.",sub,".",race,".txt")) %>%
+    dplyr::select(SampleID,Haplogroup)
+  hap1 = hap %>%
+    mutate(hapo_traverse = substr(Haplogroup, 1, 2)) %>%
+    mutate(hapo_traverse = ifelse(grepl("L",hapo_traverse),hapo_traverse,substr(Haplogroup, 1, 1)))
+ 
+  phe = fread(paste0("saxb4.",sub,".mt.",race,".fam"))%>%
+    select(V2,V6) %>%
+    dplyr::rename("SampleID"="V2",
+                  "caco" = "V6") %>%
+    inner_join(hap1,by="SampleID")
+  
+  cacoDis = table(phe$caco)
+  proportion_null = cacoDis[2]/(cacoDis[1]+cacoDis[2])
+  
+  a = table(phe$caco, phe$hapo_traverse) 
+  haps = colnames(a)
+  
+  hap.sum = data.frame(control = a[1,], case = a[2,], hapo_traverse=haps)
+
+  hap.sum1 = hap.sum %>%
+    mutate( case.percentage= round(case/(case+control),3)) 
+
+  hap.sum1$propTestP= NA  
+  
+  for(i in 1:nrow(hap.sum1)){
+    hap.sum1$propTestP[i] = round(binom.test(hap.sum1$case[i], hap.sum1$case[i]+hap.sum1$control[i], 
+                                       p = proportion_null,alternative = "two.sided")$p.value,6)
+  }
+
+  ggplot(data=hap.sum1, aes(x=hapo_traverse, y=case.percentage)) +
+    geom_bar(stat="identity",fill="steelblue")+
+    theme_bw()+
+    labs(x="Common Haplotypes Macrogroup",y=paste0("Percentage of ",sub," cases"))
+
+  ggsave(paste0(sub,".",race,".case.freq.haplo.barplot.png"),width = 8,height = 4)
+  
+  hap.sum.sum[[j]] = hap.sum1 %>% 
+    right_join(full.list,by="hapo_traverse") %>%
+    arrange(hapo_traverse) %>% 
+    dplyr::select(control,case)
+    
+  j = j +1
+  
+  hap.sum2 = hap.sum1 %>%
+    dplyr::select(hapo_traverse,control,case,case.percentage,propTestP) %>%
+    dplyr::rename("haplotypes macrogroup"="hapo_traverse",
+                  "case percentage"="case.percentage") %>%
+    arrange(`haplotypes macrogroup`)
+  rownames(hap.sum2) = c()
+  
+  write.csv(hap.sum2,paste0(sub,".",race,".macrogroup.dis.csv"))
+  
+  }
+  
+  hap.sum.sum.0 = lapply(hap.sum.sum,function(x){
+    x[is.na(x)] = 0
+    return(x)})
+  a = hap.sum.sum.0[[1]]+hap.sum.sum.0[[2]]+hap.sum.sum.0[[3]]+hap.sum.sum.0[[4]]
+  
+  hap.sum = data.frame(control = a[,1], case = a[,2], hapo_traverse=full.list$hapo_traverse)
+  
+  hap.sum1 = hap.sum %>%
+    mutate(case.percentage= round(case/(case+control),3))  %>%
+    na.omit()
+  
+  hap.sum1$propTestP= NA  
+  cacoDis = c(colSums(hap.sum1[1]),colSums(hap.sum1[2]))
+  proportion_null = cacoDis[2]/(cacoDis[1]+cacoDis[2])
+
+  for(i in 1:nrow(hap.sum1)){
+    hap.sum1$propTestP[i] = round(binom.test(hap.sum1$case[i], hap.sum1$case[i]+hap.sum1$control[i], 
+                                       p = proportion_null,alternative = "two.sided")$p.value,6)
+  }
+  
+  ggplot(data=hap.sum1, aes(x=hapo_traverse, y=case.percentage)) +
+    geom_bar(stat="identity",fill="steelblue")+
+    theme_bw()+
+    labs(x="Common Haplotypes Macrogroup",y=paste0("Percentage of all glioma cases"))
+  
+  ggsave(paste0("all.subs.",race,".case.freq.haplo.barplot.png"),width = 8,height = 4)
+  
+  hap.sum2 = hap.sum1 %>%
+    dplyr::select(hapo_traverse,control,case,case.percentage,propTestP) %>%
+    dplyr::rename("haplotypes macrogroup"="hapo_traverse",
+                  "case percentage"="case.percentage") %>%
+    arrange(`haplotypes macrogroup`)
+  rownames(hap.sum2) = c()
+  
+  write.csv(hap.sum2,paste0("all.subs.",race,".macrogroup.dis.csv"))
+  
+  }
+
+
+## a figure for both races
+
+j=1
+hap.sum.sum = list()
+
+for(sub in c("gbm","pol","non.pol","olg")){
+  
+#sub="gbm"
+
+race="EUR"
+hap.eur = fread(paste0("haplo.",sub,".",race,".txt")) %>%
+  dplyr::select(SampleID,Haplogroup)
+phe.eur = fread(paste0("saxb4.",sub,".mt.",race,".fam"))%>%
+  select(V2,V6) %>%
+  dplyr::rename("SampleID"="V2",
+                "caco" = "V6")
+race="LAT"
+hap.lat = fread(paste0("haplo.",sub,".",race,".txt")) %>%
+  dplyr::select(SampleID,Haplogroup)
+phe.lat = fread(paste0("saxb4.",sub,".mt.",race,".fam"))%>%
+  select(V2,V6) %>%
+  dplyr::rename("SampleID"="V2",
+                "caco" = "V6") 
+
+hap = rbind(hap.eur,hap.lat) %>% as.data.frame()
+
+hap1 = hap %>%
+  mutate(hapo_traverse = substr(Haplogroup, 1, 2)) %>%
+  mutate(hapo_traverse = ifelse(grepl("L",hapo_traverse),hapo_traverse,substr(Haplogroup, 1, 1)))
+
+phe = rbind(phe.eur,phe.lat) %>%
+  as.data.frame() %>%
+  inner_join(hap1,by="SampleID")
+
+a = table(phe$caco, phe$hapo_traverse) 
+haps = colnames(a)
+
+hap.sum = data.frame(control = a[1,], case = a[2,], hapo_traverse=haps)
+
+hap.sum1 = hap.sum %>%
+  mutate(case.percentage = round(case/(case+control),3)) %>%
+  arrange(desc(case.percentage))
+
+hap.sum.sum[[j]] = hap.sum1 %>% 
+  right_join(full.list,by="hapo_traverse") %>%
+  arrange(hapo_traverse) %>% 
+  dplyr::select(control,case)
+j = j +1
+
+ggplot(data=hap.sum1, aes(x=hapo_traverse, y=case.percentage)) +
+  geom_bar(stat="identity",fill="steelblue")+
+  theme_bw()+
+  labs(x="Common Haplotypes Macrogroup",y=paste0("Percentage of ",sub," cases"))
+
+ggsave(paste0("both.",sub,".freq.haplo.barplot.png"),width = 8,height = 4)
+
+}
+
+## a figure for both races, all subtypes
+hap.sum.sum.0 = lapply(hap.sum.sum,function(x){
+  x[is.na(x)] = 0
+  return(x)})
+a = hap.sum.sum.0[[1]]+hap.sum.sum.0[[2]]+hap.sum.sum.0[[3]]+hap.sum.sum.0[[4]]
+
+hap.sum = data.frame(control = a[,1], case = a[,2], hapo_traverse=full.list$hapo_traverse)
+
+hap.sum1 = hap.sum %>%
+  mutate(case.percentage = round(case/(case+control),3)) %>%
+  na.omit()%>%
+  arrange(desc(case.percentage))
+
+ggplot(data=hap.sum1, aes(x=hapo_traverse, y=case.percentage)) +
+  geom_bar(stat="identity",fill="steelblue")+
+  theme_bw()+
+  labs(x="Common Haplotypes Macrogroup",y=paste0("Percentage of all glioma cases"))
+ggsave("both.all.subs.freq.haplo.barplot.png",width = 8,height = 4)
+
+```
+
+Haplogroups of subjects with m1555 A>G mutation in controls and glioblastoma cases				
+Subject ID	Ethnicity	Case status	Haplogroup Common Macrogroup
+a550995-4395065-072221-717_C07.CEL	European	Control	H1a1	H
+a550995-4407661-112621-423_D12.CEL	European	Case	J1c3c	J
+a550995-4407666-111921-026_G03.CEL	European	case	H1at	H
+a550995-4395065-072221-713_D08.CEL	Hispanic	Control	H2a2a1	H
+a550995-4395065-072221-717_B12.CEL	Hispanic	control	D1d2	D
+a550995-4395066-080621-876_H08.CEL	Hispanic	control	D4b1a1	D
+a550995-4396667-081321-658_C08.CEL	Hispanic	case	D1f3	D
+
+# nuclear gene set analysis (determined by GO term)
+
+```{r all genes associated with mitochondrial functions}
+
+# select all genes associatedd with mitochondria functions
+## https://academic.oup.com/gbe/article/9/10/2782/4103342
+## https://www.ncbi.nlm.nih.gov/gene serach for (5739[go]) AND "Homo sapiens"[porgn:__txid9606] 
+
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(tidyverse)
+library(data.table)
+library(GenomicRanges)
+
+all.mit = fread("go_mit_gene_result.txt") %>%
+  dplyr::select(GeneID,Symbol,chromosome,start_position_on_the_genomic_accession,end_position_on_the_genomic_accession,orientation)%>%
+  dplyr::arrange(chromosome,start_position_on_the_genomic_accession,orientation)
+
+bed.all = fread("/scratch/lishaobo/GWAS/glioma/saxb4/saxb4_incl_11.bim") %>%
+  dplyr::mutate(chr=V1,
+                start=V4,
+                snp=V2) %>%
+  dplyr::select(snp,chr,start) %>%
+  dplyr::arrange(chr,start)
+
+all.mit.GR <- makeGRangesFromDataFrame(all.mit, 
+                         keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field="chromosome",
+                         start.field="start_position_on_the_genomic_accession",
+                         end.field="end_position_on_the_genomic_accession",
+                         strand.field="orientation",
+                         starts.in.df.are.0based=FALSE)
+
+bed.all.GR <- makeGRangesFromDataFrame(bed.all, 
+                         keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field="chr",
+                         start.field="start",
+                         end.field="start",
+                         starts.in.df.are.0based=FALSE)
+
+a = findOverlaps(bed.all.GR, all.mit.GR)
+mt.snps = bed.all[queryHits(a),"snp"]
+
+write.table(mt.snps,"mt.snps.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+
+```
+
+```{bash}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+    plink2 --bfile saxb4.$sub.$race\
+      --extract mt.snps.txt\
+      --covar saxb4.$sub.$race.pca.eigenvec\
+      --threads 200\
+      --glm firth-fallback hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+      --out saxb4.n_mt.$sub.$race
+  done    
+done
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+# find significance level for this
+for sub in "gbm" "pol" "non.pol" "olg"; do
+  for race in "EUR" "LAT"; do
+  
+    plink2 --bfile saxb4.$sub.$race\
+        --extract mt.snps.txt\
+        --indep-pairwise 50 10 0.1
+    echo $race.$sub.n_mt.prune
+    
+  done
+done  
+
+
+#EUR.gbm.n_mt.prune
+#--indep-pairwise (10 compute threads): 11159/19119 variants removed.
+
+#LAT.gbm.n_mt.prune
+#--indep-pairwise (10 compute threads): 9327/19126 variants removed.
+
+#EUR.pol.n_mt.prune
+#--indep-pairwise (10 compute threads): 10856/19119 variants removed.
+
+#LAT.pol.n_mt.prune
+#--indep-pairwise (10 compute threads): 9144/19126 variants removed.
+
+#EUR.non.pol.n_mt.prune
+#--indep-pairwise (10 compute threads): 10936/19119 variants removed.
+
+#LAT.non.pol.n_mt.prune
+#--indep-pairwise (10 compute threads): 9208/19126 variants removed.
+
+#EUR.olg.n_mt.prune
+#--indep-pairwise (10 compute threads): 11168/19119 variants removed.
+
+#LAT.olg.n_mt.prune
+#--indep-pairwise (10 compute threads): 9319/19126 variants removed.
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL n_mt.meta.saxb4.gbm.glm.TBL
+
+awk '$15 != "NA"{print $0}' saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid |\
+  sort -k15,15g | head
+grep "2:232616979:T:G" saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+grep "2:46156384:T:C" saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+  
+round(exp(beta),2) 
+ll=exp(beta-1.96*se)
+ul=exp(beta+1.96*se)
+print(paste0(round(ll,2),"-",round(ul,2)))
+
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# 16	78990391	16:78990391:T:C	C	T	T	29	374	0.13661	0.315217	0.130861	1475	1.09508	0.235806	3.41768e-06
+# 2	232616979	2:232616979:T:G	G	T	T	5	108	0.038514	0.0543478	0.0380014	1467	0.354806	0.487315	0.466562
+# 2	46156384	2:46156384:T:C	C	T	T	4	47	0.0172647	0.0434783	0.0164221	1477	1.00147	0.547824	0.0675358
+
+awk '$15 != "NA"{print $0}' saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid |\
+  sort -k15,15g | head
+grep "16:78990391:T:C" saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+grep "2:46156384:T:C" saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+# 2	232616979	2:232616979:T:G	G	T	T	11	63	0.0265996	0.125	0.0233853	1391	1.82241	0.377796	1.40853e-06
+# 16	78990391	16:78990391:T:C	C	T	T	14	339	0.125981	0.159091	0.124908	1401	0.259507	0.290322	0.371397
+# 2	46156384	2:46156384:T:C	C	T	T	6	25	0.0110952	0.0697674	0.00923191	1397	2.18936	0.502805	1.33499e-05
+
+awk '$4 != "NA"{print $0}' n_mt.meta.saxb4.gbm.glm.TBL |\
+  sort -k4,4g | head
+grep "16:78990391:T:C" n_mt.meta.saxb4.gbm.glm.TBL
+grep "2:232616979:T:G" n_mt.meta.saxb4.gbm.glm.TBL
+# MarkerName	        Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+# 2:46156384:T:C			1.6462	0.3704	8.827e-06	++	60.8	2.552	1	0.1102
+# 16:78990391:T:C			0.7630	0.1830	3.069e-05	++	80.0	4.991	1	0.02548
+# 2:232616979:T:G			1.2715	0.2986	2.059e-05	++	82.3	5.665	1	0.01731
+
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.n_mt.pol.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.n_mt.pol.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL n_mt.meta.saxb4.pol.glm.TBL
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.n_mt.non.pol.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.n_mt.non.pol.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL n_mt.meta.saxb4.non.pol.glm.TBL
+
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.n_mt.olg.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.n_mt.olg.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL n_mt.meta.saxb4.olg.glm.TBL
+```
+
+```{bash check genotyoe of G/G subjects}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+nano nmt.sig.mt
+2:232616979:T:G
+16:78990391:T:C
+
+nano EUR.gs.sub.list
+0   a550995-4395065-072221-717_C07.CEL
+0   a550995-4407661-112621-423_D12.CEL
+0   a550995-4407666-111921-026_G03.CEL
+
+nano LAT.gs.sub.list
+0   a550995-4395065-072221-713_D08.CEL
+0   a550995-4395065-072221-717_B12.CEL
+0   a550995-4395066-080621-876_H08.CEL
+0   a550995-4396667-081321-658_C08.CEL
+
+sub="gbm"
+race="EUR"
+plink2 --bfile saxb4.$sub.$race\
+  --extract nmt.sig.mt\
+  --keep $race.gs.sub.list\
+  --recode vcf bgz\
+  --out sighitscheck.$sub.$race
+
+#sighitscheck.gbm.EUR.vcf.gz
+
+sub="gbm"
+race="LAT"
+plink2 --bfile saxb4.$sub.$race\
+  --extract nmt.sig.mt\
+  --keep $race.gs.sub.list\
+  --recode vcf bgz\
+  --out sighitscheck.$sub.$race
+
+```
+
+```{r check genotyoe of G/G subjects}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(vcfR)
+library(tidyverse)
+library(data.table)
+
+for(race in c("EUR","LAT")){
+  
+  sub="gbm"
+
+  vcfR = read.vcfR(paste0("sighitscheck.",sub,".",race,".vcf.gz"))
+
+  vcf_tidy <-vcfR2tidy(vcfR, dot_is_NA=TRUE, single_frame=TRUE)
+  
+  print(vcf_tidy$dat %>% as.data.frame())
+
+
+}
+
+
+```
+
+```{r visualization}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+# files =c("saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.gbm.glm.TBL",
+#           "saxb4.n_mt.pol.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.pol.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.pol.glm.TBL",
+#           "saxb4.n_mt.non.pol.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.non.pol.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.non.pol.glm.TBL",
+#           "saxb4.n_mt.olg.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.olg.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.olg.glm.TBL")
+
+files =c("saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid",
+          "saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid",
+          "n_mt.meta.saxb4.gbm.glm.TBL")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) 
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(CHROM), 
+                    POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      na.omit()%>%
+      dplyr::mutate(P= as.numeric(as.character(P)),
+                    CHROM = as.numeric(`#CHROM`), 
+                    POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]%>%
+    mutate(logP=-log10(P))
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  if(i=="saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid") testN= 19119-11159
+  if(i=="saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid") testN= 19126-9327
+  if(i=="n_mt.meta.saxb4.gbm.glm.TBL") testN=((19119-11159)+(19126-9327))/2
+  if(i=="saxb4.n_mt.pol.EUR.PHENO1.glm.logistic.hybrid") testN=19119-10856
+  if(i=="saxb4.n_mt.pol.LAT.PHENO1.glm.logistic.hybrid") testN=19126-9144
+  if(i=="n_mt.meta.saxb4.pol.glm.TBL") testN=((19119-10856)+(19126-9144))/2
+  if(i=="saxb4.n_mt.non.pol.EUR.PHENO1.glm.logistic.hybrid") testN=19119-10936
+  if(i=="saxb4.n_mt.non.pol.LAT.PHENO1.glm.logistic.hybrid") testN=19126-9208
+  if(i=="n_mt.meta.saxb4.non.pol.glm.TBL") testN=((19119-10936)+(19126-9208))/2
+  if(i=="saxb4.n_mt.olg.EUR.PHENO1.glm.logistic.hybrid") testN=19119-11168
+  if(i=="saxb4.n_mt.olg.LAT.PHENO1.glm.logistic.hybrid") testN=19126-9319
+  if(i=="n_mt.meta.saxb4.olg.glm.TBL") testN=((19119-11168)+(19126-9319))/2
+
+#   gwas_data_1 %>%
+#     ggplot(aes(x=POS,y=logP))+
+#     geom_point()+
+#     theme_bw()+
+#     geom_hline(yintercept = -log10(0.05/testN), colour="red",alpha=0.5)+
+#     labs(x="SNPs on MT",y="- log P value")+
+#     ggtitle(paste0("MT SNPs in glioma cases and controls ",filename))+
+#     theme(plot.title = element_text(hjust = 0.5))
+# ggsave(paste0("logPmtGliomacaco",filename,".png"),width = 8,height = 6)
+
+
+  png(paste0(filename,".manhattan.png"), width = 11, height = 7, units = 'in', res = 300)
+  par(mar=c(5,6,4,1)+.1)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID",
+            col = c("red", "blue"), 
+            suggestiveline = F,
+            genomewideline = -log10(0.05/testN),
+            cex.axis=1.3,
+            cex.lab=1.8)
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  par(mar=c(5,6,4,1)+.1)
+  qq(gwas_data_1$P,
+     cex.axis=1.3,
+     cex.lab=1.8)
+  dev.off()
+
+
+}
+
+# [1] "lambda value of saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid is: 1.30663162815621"
+# [1] "lambda value of saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid is: 0.928268713244094"
+# [1] "lambda value of n_mt.meta.saxb4.gbm.glm.TBL is: 1.313562591634"
+# [1] "lambda value of saxb4.n_mt.pol.EUR.PHENO1.glm.logistic.hybrid is: 0.73978666734962"
+# [1] "lambda value of saxb4.n_mt.pol.LAT.PHENO1.glm.logistic.hybrid is: 0.832177347863835"
+# [1] "lambda value of n_mt.meta.saxb4.pol.glm.TBL is: 0.810900538960555"
+# [1] "lambda value of saxb4.n_mt.non.pol.EUR.PHENO1.glm.logistic.hybrid is: 0.709041360932138"
+# [1] "lambda value of saxb4.n_mt.non.pol.LAT.PHENO1.glm.logistic.hybrid is: 0.776211079787768"
+# [1] "lambda value of n_mt.meta.saxb4.non.pol.glm.TBL is: 0.754344832063308"
+# [1] "lambda value of saxb4.n_mt.olg.EUR.PHENO1.glm.logistic.hybrid is: 1.26216422573072"
+# [1] "lambda value of saxb4.n_mt.olg.LAT.PHENO1.glm.logistic.hybrid is: 1.06424162558952"
+# [1] "lambda value of n_mt.meta.saxb4.olg.glm.TBL is: 1.44118958565256"
+
+```  
+
+# nuclear gene set analysis (determined by MitoCarta3.0)
+
+```{r get ready to liftover from hg19 to hg38}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(tidyverse)
+library(data.table)
+
+mitocarta = read.csv("mitocarta.csv") %>%
+  dplyr::select(hg19_Chromosome,hg19_Start,hg19_Stop,HumanGeneID,Symbol) %>%
+  mutate(chr_num=as.numeric(gsub("^chr","",hg19_Chromosome))) %>%
+  na.omit()%>%
+  arrange(chr_num,hg19_Start) %>%
+  dplyr::select(-chr_num)
+
+write.table(mitocarta, "mitocarta.hg19.txt",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote=FALSE,
+            sep='\t')
+```
+
+```{bash lift over from hg19 to hg38}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+liftOver mitocarta.hg19.txt \
+  /scratch/lishaobo/dependencies/liftOver/hg19ToHg38.over.chain\
+   mitocarta.hg38.txt \
+   mitocarta.hg19.unlifted.bed
+
+```
+
+
+```{r all genes associated with mitochondrial functions}
+
+# select all genes associatedd with mitochondria functions
+## https://www.broadinstitute.org/mitocarta/mitocarta30-inventory-mammalian-mitochondrial-proteins-and-pathways
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(tidyverse)
+library(data.table)
+library(GenomicRanges)
+
+all.mit = fread("mitocarta.hg38.txt") 
+colnames(all.mit) = c("chromosome","start_position_on_the_genomic_accession","end_position_on_the_genomic_accession","HumanGeneID","Symbol")
+all.mit = all.mit %>%
+  mutate(chromosome=gsub("^chr","",chromosome))
+
+bed.all = fread("/scratch/lishaobo/GWAS/glioma/saxb4/saxb4_incl_11.bim") %>%
+  dplyr::mutate(chr=V1,
+                start=V4,
+                snp=V2) %>%
+  dplyr::select(snp,chr,start) %>%
+  dplyr::arrange(chr,start)
+
+all.mit.GR <- makeGRangesFromDataFrame(all.mit, 
+                         keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field="chromosome",
+                         start.field="start_position_on_the_genomic_accession",
+                         end.field="end_position_on_the_genomic_accession",
+                         strand.field="orientation",
+                         starts.in.df.are.0based=FALSE)
+
+bed.all.GR <- makeGRangesFromDataFrame(bed.all, 
+                         keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field="chr",
+                         start.field="start",
+                         end.field="start",
+                         starts.in.df.are.0based=FALSE)
+
+a = findOverlaps(bed.all.GR, all.mit.GR)
+mt.snps = bed.all[queryHits(a),"snp"]
+
+# 10497 SNPs available
+
+write.table(mt.snps,"mitocarta.mt.snps.txt",
+            sep='\t',
+            quote=FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+
+```
+
+```{bash}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+#for sub in "gbm" "pol" "non.pol" "olg"; do
+sub="gbm"
+  for race in "EUR" "LAT"; do
+    plink2 --bfile saxb4.$sub.$race\
+      --extract mitocarta.mt.snps.txt\
+      --covar saxb4.$sub.$race.pca.eigenvec\
+      --threads 200\
+      --glm firth-fallback hide-covar cols=chrom,pos,ref,alt1,nobs,a1countcc,a1freq,a1freqcc,beta,se,p\
+        --out saxb4.mitocarta.n_mt.$sub.$race
+  done    
+#done
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+# find significance level for this
+#for sub in "gbm" "pol" "non.pol" "olg"; do
+sub="gbm"
+  for race in "EUR" "LAT"; do
+  
+  
+    plink2 --bfile saxb4.$sub.$race\
+        --extract mitocarta.mt.snps.txt\
+        --indep-pairwise 50 10 0.1
+    echo $race.$sub.mitocarta.n_mt.prune
+    
+  done
+#done  
+
+
+# EUR.gbm.mitocarta.n_mt.prune
+# --indep-pairwise (9 compute threads): 5393/10343 variants removed. (4950)
+
+# LAT.gbm.mitocarta.n_mt.prune
+# --indep-pairwise (9 compute threads): 4391/10347 variants removed. (5956)
+
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+metal
+MARKER ID
+EFFECT BETA
+PVALUE P
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+PROCESS saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+PROCESS saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+ANALYZE HETEROGENEITY
+QUIT
+mv METAANALYSIS1.TBL mitocarta.n_mt.meta.saxb4.gbm.glm.TBL
+
+awk '$15 != "NA"{print $0}' saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid |\
+  sort -k15,15g | head
+grep " " saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+grep " " saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid
+  
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+#1	75753171	1:75753171:A:G	G	A	A	9	67	0.0257453	0.0978261	0.0234266	1476	1.61117	0.39807	5.17796e-05
+#18	63312127	18:63312127:T:C	C	T	T	36	594	0.213415	0.391304	0.207692	1476	0.810772	0.213746	0.000148741
+#1	25830087	1:25830087:C:T	T	C	C	2	2	0.00135777	0.0217391	0.000700771	1473	3.72828	1.02918	0.000291681
+
+awk '$15 != "NA"{print $0}' saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid |\
+  sort -k15,15g | head
+grep " " saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+grep " " saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid
+#CHROM	POS	ID	REF	ALT1	A1	A1_CASE_CT	A1_CTRL_CT	A1_FREQ	A1_CASE_FREQ	A1_CTRL_FREQ	OBS_CT	BETA	SE	P
+#2	232616979	2:232616979:T:G	G	T	T	11	63	0.0265996	0.125	0.0233853	1391	1.82241	0.377796	1.40853e-06
+#19	48795352	19:48795352:A:G	G	A	A	3	6	0.00321658	0.0340909	0.00221402	1399	3.38058	0.797603	2.2509e-05
+#1	12450376	1:12450376:G:A	A	G	G	6	30	0.0128663	0.0681818	0.0110701	1399	2.00367	0.492603	4.75187e-05
+
+awk '$4 != "NA"{print $0}' mitocarta.n_mt.meta.saxb4.gbm.glm.TBL |\
+  sort -k4,4g | head
+grep "16:78990391:T:C" mitocarta.n_mt.meta.saxb4.gbm.glm.TBL
+grep "2:232616979:T:G" mitocarta.n_mt.meta.saxb4.gbm.glm.TBL
+#MarkerName	Allele1	Allele2	Effect	StdErr	P-value	Direction	HetISq	HetChiSq	HetDf	HetPVal
+#19:48795352:A:G			3.3027	0.7564	1.262e-05	++	0.0	0.095	1	0.7582
+#2:232616979:T:G			1.2715	0.2986	2.059e-05	++	82.3	5.665	1	0.01731
+#1:12450376:G:A			1.2299	0.3113	7.781e-05	++	75.7	4.107	1	0.0427
+
+```
+
+```{r visualization}
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+
+library(tidyverse)
+library(QCEWAS)
+library(qqman)
+library(data.table)
+
+# files =c("saxb4.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.gbm.glm.TBL",
+#           "saxb4.n_mt.pol.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.pol.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.pol.glm.TBL",
+#           "saxb4.n_mt.non.pol.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.non.pol.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.non.pol.glm.TBL",
+#           "saxb4.n_mt.olg.EUR.PHENO1.glm.logistic.hybrid",
+#           "saxb4.n_mt.olg.LAT.PHENO1.glm.logistic.hybrid",
+#           "n_mt.meta.saxb4.olg.glm.TBL")
+
+files =c("saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid",
+          "saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid",
+          "mitocarta.n_mt.meta.saxb4.gbm.glm.TBL")
+
+for(i in files){
+  
+  filename <- gsub("^.*/","",i)
+  gwas_data <- fread(i) 
+  
+  if(length(grep("meta",i)) !=0 ){
+    gwas_data_1 <- gwas_data %>%
+      dplyr::mutate(ID=MarkerName, P=`P-value`)%>%
+      separate(MarkerName, c("CHROM","POS","REF","ALT"))%>%
+      dplyr::mutate(CHROM = as.numeric(CHROM), 
+                    POS = as.numeric(as.character(POS)))
+  } else{
+    gwas_data_1 <- gwas_data %>%
+      na.omit()%>%
+      dplyr::mutate(P= as.numeric(as.character(P)),
+                    CHROM = as.numeric(`#CHROM`), 
+                    POS = as.numeric(as.character(POS)))%>%
+      arrange(P)
+  }
+  
+  gwas_data_1 <- gwas_data_1[is.finite(gwas_data_1$P),  ]%>%
+    mutate(logP=-log10(P))
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  if(i=="saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid") testN= 4950
+  if(i=="saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid") testN= 5956
+  if(i=="mitocarta.n_mt.meta.saxb4.gbm.glm.TBL") testN=(4950+5956)/2
+
+#   gwas_data_1 %>%
+#     ggplot(aes(x=POS,y=logP))+
+#     geom_point()+
+#     theme_bw()+
+#     geom_hline(yintercept = -log10(0.05/testN), colour="red",alpha=0.5)+
+#     labs(x="SNPs on MT",y="- log P value")+
+#     ggtitle(paste0("MT SNPs in glioma cases and controls ",filename))+
+#     theme(plot.title = element_text(hjust = 0.5))
+# ggsave(paste0("logPmtGliomacaco",filename,".png"),width = 8,height = 6)
+
+
+  png(paste0(filename,".manhattan.png"), width = 11, height = 7, units = 'in', res = 300)
+  par(mar=c(5,6,4,1)+.1)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "ID",
+            col = c("red", "blue"), 
+            suggestiveline = F,
+            genomewideline = -log10(0.05/testN),
+            cex.axis=1.3,
+            cex.lab=1.8)
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  par(mar=c(5,6,4,1)+.1)
+  qq(gwas_data_1$P,
+     cex.axis=1.3,
+     cex.lab=1.8)
+  dev.off()
+
+
+}
+
+#[1] "lambda value of saxb4.mitocarta.n_mt.gbm.EUR.PHENO1.glm.logistic.hybrid is: 1.29689655322067"
+#[1] "lambda value of saxb4.mitocarta.n_mt.gbm.LAT.PHENO1.glm.logistic.hybrid is: 0.932166263401004"
+#[1] "lambda value of mitocarta.n_mt.meta.saxb4.gbm.glm.TBL is: 1.32798184544939"
+
+```  
+
+```{bash whether the m1555 G allele carriers also carry the risk allele for at least one of the n-mt SNPs you identified}
+
+cd /scratch/lishaobo/GWAS/glioma/glioma_mt
+
+nano mt_sig_snps.txt
+16:78990391:T:C
+2:232616979:T:G
+2:46156384:T:C
+
+nano agpeople.txt
+0 a550995-4395065-072221-717_C07.CEL
+0 a550995-4407661-112621-423_D12.CEL
+0 a550995-4407666-111921-026_G03.CEL
+0 a550995-4395065-072221-713_D08.CEL
+0 a550995-4395065-072221-717_B12.CEL
+0 a550995-4395066-080621-876_H08.CEL
+0 a550995-4396667-081321-658_C08.CEL
+
+sub="gbm"
+for race in "EUR" "LAT"; do
+  plink2 --bfile saxb4.$sub.$race\
+    --extract mt_sig_snps.txt\
+    --keep agpeople.txt\
+    --make-bed\
+    --out mt.1555pos.somatic.$race
+done    
+
+plink --bfile mt.1555pos.somatic.EUR\
+  --bmerge mt.1555pos.somatic.LAT.bed mt.1555pos.somatic.LAT.bim mt.1555pos.somatic.LAT.fam\
+  --recode vcf bgz\
+  --out mt.1555pos.somatic
+
+```
+
+```{r}
+
+# Haplogroups of subjects with m1555 A>G mutation in controls and glioblastoma cases				
+# Subject ID	Ethnicity	Case status	Haplogroup Common Macrogroup
+# a550995-4395065-072221-717_C07.CEL	European	Control	H1a1	H
+# a550995-4407661-112621-423_D12.CEL	European	Case	J1c3c	J
+# a550995-4407666-111921-026_G03.CEL	European	case	H1at	H
+# a550995-4395065-072221-713_D08.CEL	Hispanic	Control	H2a2a1	H
+# a550995-4395065-072221-717_B12.CEL	Hispanic	control	D1d2	D
+# a550995-4395066-080621-876_H08.CEL	Hispanic	control	D4b1a1	D
+# a550995-4396667-081321-658_C08.CEL	Hispanic	case	D1f3	D
+
+setwd("/scratch/lishaobo/GWAS/glioma/glioma_mt")
+library(vcfR)
+library(tidyverse)
+library(data.table)
+
+vcfR = read.vcfR("mt.1555pos.somatic.vcf.gz")
+vcf_tidy <-vcfR2tidy(vcfR, dot_is_NA=TRUE, single_frame=TRUE)
+
+vcf_tidy$dat %>% 
+  as.data.frame%>%
+  dplyr::select(-QUAL, -FILTER, -PR) %>%
+  filter(ID=="2:46156384:T:C")
+
+vcf_tidy$dat %>% 
+  as.data.frame%>%
+  dplyr::select(-QUAL, -FILTER, -PR) %>%
+  filter(ID=="2:232616979:T:G")
+
+vcf_tidy$dat %>% 
+  as.data.frame%>%
+  dplyr::select(-QUAL, -FILTER, -PR) %>%
+  filter(ID=="16:78990391:T:C")
+
+```
+
+  CHROM      POS             ID REF ALT                                Indiv
+1     2 46156384 2:46156384:T:C   C   T 0_a550995-4395065-072221-713_D08.CEL
+2     2 46156384 2:46156384:T:C   C   T 0_a550995-4395065-072221-717_B12.CEL
+3     2 46156384 2:46156384:T:C   C   T 0_a550995-4395065-072221-717_C07.CEL
+4     2 46156384 2:46156384:T:C   C   T 0_a550995-4395066-080621-876_H08.CEL
+5     2 46156384 2:46156384:T:C   C   T 0_a550995-4396667-081321-658_C08.CEL
+6     2 46156384 2:46156384:T:C   C   T 0_a550995-4407661-112621-423_D12.CEL
+7     2 46156384 2:46156384:T:C   C   T 0_a550995-4407666-111921-026_G03.CEL
+  gt_GT gt_GT_alleles
+1   0/0           C/C
+2   0/0           C/C
+3   0/0           C/C
+4   0/0           C/C
+5   0/0           C/C
+6   0/0           C/C
+7   0/0           C/C
+
+ CHROM       POS              ID REF ALT                                Indiv
+1     2 232616979 2:232616979:T:G   G   T 0_a550995-4395065-072221-713_D08.CEL
+2     2 232616979 2:232616979:T:G   G   T 0_a550995-4395065-072221-717_B12.CEL
+3     2 232616979 2:232616979:T:G   G   T 0_a550995-4395065-072221-717_C07.CEL
+4     2 232616979 2:232616979:T:G   G   T 0_a550995-4395066-080621-876_H08.CEL
+5     2 232616979 2:232616979:T:G   G   T 0_a550995-4396667-081321-658_C08.CEL
+6     2 232616979 2:232616979:T:G   G   T 0_a550995-4407661-112621-423_D12.CEL
+7     2 232616979 2:232616979:T:G   G   T 0_a550995-4407666-111921-026_G03.CEL
+  gt_GT gt_GT_alleles
+1   0/0           G/G
+2   0/0           G/G
+3   0/0           G/G
+4   0/0           G/G
+5   0/1           G/T
+6   0/0           G/G
+7   0/0           G/G
+
+  CHROM      POS              ID REF ALT                                Indiv
+1    16 78990391 16:78990391:T:C   C   T 0_a550995-4395065-072221-713_D08.CEL
+2    16 78990391 16:78990391:T:C   C   T 0_a550995-4395065-072221-717_B12.CEL
+3    16 78990391 16:78990391:T:C   C   T 0_a550995-4395065-072221-717_C07.CEL
+4    16 78990391 16:78990391:T:C   C   T 0_a550995-4395066-080621-876_H08.CEL
+5    16 78990391 16:78990391:T:C   C   T 0_a550995-4396667-081321-658_C08.CEL
+6    16 78990391 16:78990391:T:C   C   T 0_a550995-4407661-112621-423_D12.CEL
+7    16 78990391 16:78990391:T:C   C   T 0_a550995-4407666-111921-026_G03.CEL
+  gt_GT gt_GT_alleles
+1   0/0           C/C
+2   0/1           C/T
+3   0/0           C/C
+4   0/0           C/C
+5   0/0           C/C
+6   0/0           C/C
+7   1/1           T/T
+
+
+
+
+
+

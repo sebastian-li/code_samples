@@ -1,0 +1,739 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: EWAS study between DNA methylation and TSH (Thyroid-stimulating hormone) levels.
+
+```{r prepare covariates file}
+
+library(tidyverse)
+library(data.table)
+
+setwd("~/ewas/tsh")
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+
+# prepare a clinial variable
+
+# tsh.raw = read.csv("raw/DScontrols_TSHvalues_Nov21.csv")[1:154,] %>%
+#   dplyr::select(-X,-X.1,-X.2)
+
+tsh.raw = read.csv("raw/DScontrols_TSHvalues_Jan22.csv")[1:121,]  %>%
+  dplyr::select(-X) %>%
+  mutate(category = as.factor(category),
+         category_new = as.factor(category_new),
+         TSH_log = log(TSH_mIU_L))
+
+# without gestational age and collection age
+# clinical1 = read.csv("~/sets/set3/clinical_variables.csv") %>%
+#   inner_join(tsh.raw, by =c("subjectId"="DS.AL.Study.ID")) %>%
+#   mutate(Batch = as.factor(Batch),
+#          category = as.factor(category)) %>%
+#   dplyr::select(subjectId,beadPosition,TSH_mIU_L,category,sex,Batch) 
+
+# with gestational age and collection age
+clinical1 = read.csv("~/sets/set3/clinical_variables.csv") %>%
+  inner_join(tsh.raw, by =c("subjectId"="DS.AL.Study.ID")) %>%
+  mutate(Batch = as.factor(Batch),
+         category = as.factor(category)) %>%
+  dplyr::select(subjectId,beadPosition,TSH_log,category,category_new,
+                sex,Batch,collectionAge) %>%
+  na.omit()
+
+#tsh.raw$DS.AL.Study.ID[which(!tsh.raw$DS.AL.Study.ID %in% clinical1$subjectId)]
+
+dcp1 = fread("~/sets/set3/idol_deconvolution.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,nRBC) %>%
+  na.omit() %>%
+  inner_join(clinical1,by="beadPosition")
+
+epis1 = fread("~/sets/set3/glintControl.csv") %>%
+  as.data.frame() %>%
+  dplyr::select(beadPosition,epi1,epi2,epi3,epi4,epi5) %>%
+  na.omit() %>%
+  inner_join(dcp1,by="beadPosition") %>%
+  dplyr::select(beadPosition,subjectId,TSH_log,category,category_new,everything())
+
+write_rds(epis1,"clinical.tsh.2022.rds")
+#write_rds(epis1,"clinical.tsh.rds")
+#write_rds(epis1,"clinical.tsh.nocov.rds")
+
+     
+methy_tm_0 = fread("~/sets/set3/set3_Sesame_beta.csv")
+
+methy_tm =  methy_tm_0[,-1] %>%
+  column_to_rownames("probeId") %>%
+  as.data.frame() %>% 
+  data.matrix() 
+  
+methy_tm_1 = methy_tm[,epis1$beadPosition]
+colnames(methy_tm_1) = epis1$subjectId
+  
+cgInd = which(grepl("cg",rownames(methy_tm_1)))
+methy_tm_2 = methy_tm_1[cgInd,]
+  
+replace.outliers <- winsorize(methy_tm_2,0.005)
+  
+methy <- replace.outliers$methylation %>% 
+  as.data.frame() %>%
+  rownames_to_column(var="probeId")
+
+write_rds(methy,"methSet.tsh.2022.rds")
+#write_rds(methy,"methSet.tsh.rds")
+#write_rds(methy,"methSet.tsh.nocov.rds")
+```
+
+```{r plotting the relationship between 20 PCs and TSH}
+
+library(tidyverse)
+library(data.table)
+library(Hmisc)
+library(corrplot)
+
+setwd("~/ewas/tsh")
+
+clinical = read_rds("clinical.tsh.nocov.rds") %>%
+  dplyr::select(epi1,epi2,epi3,epi4,epi5,CD8T,CD4T,NK,Bcell,Mono,nRBC,TSH_mIU_L)%>%
+  as.matrix()
+
+corr_mat <- cor(clinical,method="pearson")
+corre <- Hmisc::rcorr(as.matrix(clinical),type="pearson")
+
+heatmap(x = corr_mat, symm = TRUE,cexCol=0.6,cexRow=0.8)
+
+corrplot::corrplot(corr_mat,type="upper",
+                   order = "hclust",tl.cex =0.6,	
+                   tl.col = "black", tl.srt = 45)
+
+
+clinical.w.cov = read_rds("clinical.tsh.rds") %>%
+  dplyr::select(epi1,epi2,epi3,epi4,epi5,CD8T,CD4T,NK,Bcell,Mono,nRBC,
+                TSH_mIU_L,collectionAge,Y_gestation_week)%>%
+  as.matrix()
+
+corr_mat <- cor(clinical.w.cov,method="pearson")
+corre <- Hmisc::rcorr(as.matrix(clinical.w.cov),type="pearson")
+
+heatmap(x = corr_mat, symm = TRUE,cexCol=0.6,cexRow=0.8)
+
+corrplot::corrplot(corr_mat,type="upper",
+                   order = "hclust",tl.cex =0.6,	
+                   tl.col = "black", tl.srt = 45)
+
+```
+
+
+```{r start scanning!}
+
+setwd("~/ewas/tsh")
+library(tidyverse)
+library(data.table)
+library(MASS)
+library(lmtest)
+library(sfsmisc)
+library(sandwich)
+library(parallel) 
+
+cl <- makeCluster(40, type="FORK")
+clusterEvalQ(cl,library(MASS))
+clusterEvalQ(cl,library(lmtest))
+
+linear <- function(meth,cov){
+
+  probe <- unname(meth[1])
+  methDF = meth[-1] %>% as.numeric()
+  
+  dat <- data.frame(y = methDF, cov)
+  ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
+  mod <- try(lm(ff, data = dat),silent = TRUE)
+  
+  N <- sum(!is.na(dat[,1]))
+  
+  if (class(mod)=="lm") {
+    
+    coefs = summary(mod)$coefficients
+    coef = coefs[2,"Estimate"]
+    SE = coefs[2,"Std. Error"]
+    p.value = coefs[2,"Pr(>|t|)"]
+    out = c(coef, SE, p.value, N) 
+  } else {
+    out = c(rep(NA,3), N)
+  }
+  names(out) = c("Beta","SE", "P", "N"); return(out) 
+}
+
+# without clinical covariates
+# methyl0 = read_rds("methSet.tsh.nocov.rds") %>% as.data.frame()
+# covs0 = read_rds("clinical.tsh.nocov.rds")%>% 
+#   as.data.frame()%>% 
+#   dplyr::select(-beadPosition)%>% column_to_rownames(var="subjectId")
+# subs.list = intersect(rownames(covs0),colnames(methyl0))
+# methyl = methyl0[,c("probeId",subs.list)]
+# rownames(methyl) <- methyl$probeId
+# covs = covs0[subs.list,]
+
+# with clinical covariates
+# methyl0.cov = read_rds("methSet.tsh.rds") %>% as.data.frame()
+# covs0.cov = read_rds("clinical.tsh.rds")%>%
+#   as.data.frame()%>%
+#   dplyr::select(-beadPosition)%>% column_to_rownames(var="subjectId")
+
+methyl0.cov = read_rds("methSet.tsh.2022.rds") %>% as.data.frame()
+covs0.cov = read_rds("clinical.tsh.2022.rds")%>%
+  as.data.frame()%>%
+  dplyr::select(-beadPosition)%>% column_to_rownames(var="subjectId")
+
+subs.list.cov = intersect(rownames(covs0.cov),colnames(methyl0.cov))
+methyl.cov = methyl0.cov[,c("probeId",subs.list.cov)]
+rownames(methyl.cov) <- methyl.cov$probeId
+covs.cov = covs0.cov[subs.list.cov,]
+
+covs_cont_model_2021_1= covs.cov[,c("TSH_log","sex","Batch","epi1","epi2","CD8T",
+                                    "CD4T","NK","Bcell","Mono","nRBC","collectionAge")]
+
+covs_cont_model_2021_2= covs.cov[,c("category","sex","Batch","epi1","epi2","CD8T",
+                                    "CD4T","NK","Bcell","Mono","nRBC","collectionAge")]
+
+covs_cont_model_2021_3= covs.cov[,c("category_new","sex","Batch","epi1","epi2","CD8T",
+                                    "CD4T","NK","Bcell","Mono","nRBC","collectionAge")]
+
+### coded with continuous value
+#covs_cont = covs[,-which(colnames(covs)%in%c("category","category_new"))]
+#covs_cont.cov.rmot = covs_cont.cov[-which.max(covs_cont.cov$TSH_mIU_L),]
+
+# (removing outlier from methylation)
+# subs.list.cov.rmot = intersect(rownames(covs_cont.cov.rmot),colnames(methyl0.cov))
+# methyl.cov.rmot = methyl0.cov[,c("probeId",subs.list.cov.rmot)]
+# rownames(methyl.cov.rmot) <- methyl.cov.rmot$probeId
+
+# covs_cont_model1=covs_cont.cov[,c("TSH_mIU_L","sex","Batch","collectionAge")]
+# covs_cont_model1.rmot=covs_cont.cov.rmot[,c("TSH_mIU_L","sex","Batch","collectionAge")]
+# covs_cont_model2=covs_cont[,c("TSH_mIU_L","sex","Batch","epi1","epi2")]
+# covs_cont_model3=covs_cont[,c("TSH_mIU_L","sex","Batch","epi1","epi2","epi3","epi4","epi5")]
+# covs_cont_model4=covs_cont[,c("TSH_mIU_L","sex","Batch","Mono","CD4T")]
+# covs_cont_model5=covs_cont[,c("TSH_mIU_L","sex","Batch","CD8T","CD4T","NK","Bcell","Mono","nRBC")]
+# covs_cont_model6=covs_cont[,c("TSH_mIU_L","sex","Batch","epi1","epi2","Mono","CD4T")]
+# #covs_cont_model7=covs_cont # done,tsh.con.ewas
+# #covs_cont_model8= covs_cont.cov # done, tsh.con.add.cov.ewas
+# covs_cont_model9=covs_cont[,c("TSH_mIU_L","sex","Batch","epi1","epi2","CD8T","CD4T","NK","Bcell","Mono","nRBC")]
+# covs_cont_model10= covs_cont.cov[,c("TSH_mIU_L","sex","Batch","epi1","epi2","CD8T",
+#                                     "CD4T","NK","Bcell","Mono","nRBC","collectionAge")] 
+# covs_cont_model10.rmot= covs_cont.cov.rmot[,c("TSH_mIU_L","sex","Batch","epi1","epi2","CD8T",
+#                                     "CD4T","NK","Bcell","Mono","nRBC","collectionAge")] 
+
+
+#tem = t(apply(methyl[1:100,], 1, linear, covs_cont))
+# results1 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model1)) 
+# results1.rmot <- t(parApply(cl, methyl.cov.rmot, 1, linear, covs_cont_model1.rmot)) 
+# results2 <- t(parApply(cl, methyl, 1, linear, covs_cont_model2)) 
+# results3 <- t(parApply(cl, methyl, 1, linear, covs_cont_model3)) 
+# results4 <- t(parApply(cl, methyl, 1, linear, covs_cont_model4)) 
+# results5 <- t(parApply(cl, methyl, 1, linear, covs_cont_model5)) 
+# results6 <- t(parApply(cl, methyl, 1, linear, covs_cont_model6)) 
+# #results7 <- t(parApply(cl, methyl, 1, linear, covs_cont_model7)) 
+# #results8 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model8)) 
+# results9 <- t(parApply(cl, methyl, 1, linear, covs_cont_model9)) 
+# results10 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model10)) 
+# results10.rmot <- t(parApply(cl, methyl.cov.rmot, 1, linear, covs_cont_model10.rmot)) 
+
+# methyl.cov.t = methyl.cov[1:100,]
+# results_2021_1 = t(apply(methyl.cov.t, 1, linear, covs_cont_model_2021_1)) 
+results_2021_1 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model_2021_1)) 
+results_2021_2 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model_2021_2)) 
+results_2021_3 <- t(parApply(cl, methyl.cov, 1, linear, covs_cont_model_2021_3)) 
+
+# results1 <- as.data.frame(results1) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results1,"results1.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results1.rmot <- as.data.frame(results1.rmot) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results1.rmot,"results1.rmot.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results2 <- as.data.frame(results2) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results2,"results2.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results3 <- as.data.frame(results3) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results3,"results3.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results4 <- as.data.frame(results4) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results4,"results4.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results5 <- as.data.frame(results5) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results5,"results5.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results6 <- as.data.frame(results6) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results6,"results6.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+
+# results7 <- as.data.frame(results7) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results7,"tsh.con.ewas",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+
+# results8 <- as.data.frame(results8) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results8,"tsh.con.add.cov.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+
+# results9 <- as.data.frame(results9) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results9,"results9.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results10 <- as.data.frame(results10) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results10,"results10.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+# 
+# results10.rmot <- as.data.frame(results10.rmot) %>% rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,!is.na(P))
+# write.table(results10.rmot,"results10.rmot.tsh.con.ewas.txt",quote=FALSE,
+#             row.names = FALSE,sep='\t')
+
+
+results_2021_1 <- as.data.frame(results_2021_1) %>% rownames_to_column(var="CpG") %>%
+  mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+  filter(N>max(N)/2,!is.na(P))
+write.table(results_2021_1,"results_2021_1.tsh.con.ewas.txt",quote=FALSE,
+            row.names = FALSE,sep='\t')
+
+results_2021_2 <- as.data.frame(results_2021_2) %>% rownames_to_column(var="CpG") %>%
+  mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+  filter(N>max(N)/2,!is.na(P))
+write.table(results_2021_2,"results_2021_2.tsh.cate.ewas.txt",quote=FALSE,
+            row.names = FALSE,sep='\t')
+
+results_2021_3 <- as.data.frame(results_2021_3) %>% rownames_to_column(var="CpG") %>%
+  mutate(N=as.numeric(N))%>% mutate(P=as.numeric(P))%>%
+  filter(N>max(N)/2,!is.na(P))
+write.table(results_2021_3,"results_2021_3.tsh.cate.new.ewas.txt",quote=FALSE,
+            row.names = FALSE,sep='\t')
+
+############################################################
+### coded with categorical value
+#covs_cate = covs[,-which(colnames(covs)=="TSH_mIU_L")]
+
+#tem = t(apply(methyl[1:100,], 1, linear, covs_cate))
+# results <- t(parApply(cl, methyl, 1, linear, covs_cate)) 
+# 
+# results <- as.data.frame(results) %>%
+#   rownames_to_column(var="CpG") %>%
+#   mutate(N=as.numeric(N))%>%
+#   mutate(P=as.numeric(P))%>%
+#   filter(N>max(N)/2,
+#          !is.na(P))
+  
+# write.table(results,
+#             paste0("tsh.cate.ewas.txt"),
+#             quote=FALSE,
+#             row.names = FALSE,
+#             sep='\t')  
+
+# write.table(results,
+#             paste0("tsh.cate.add.cov.ewas.txt"),
+#             quote=FALSE,
+#             row.names = FALSE,
+#             sep='\t')  
+  
+stopCluster(cl)
+rm(list=ls())
+  
+```
+
+```{r plotting manhantton plot and qq plot for all 8 models}
+
+setwd("~/ewas/tsh")
+library(tidyverse)
+library(data.table)
+library(QCEWAS)
+library(qqman)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(chr=gsub("chr","",chr))%>%
+  dplyr::select(chr,pos,Name) 
+
+files =c( "results_2021_1.tsh.con.ewas.txt",
+          "results_2021_2.tsh.cate.ewas.txt",
+          "results_2021_3.tsh.cate.new.ewas.txt")
+
+# files =c( "results1.tsh.con.ewas.txt",
+#           "results1.rmot.tsh.con.ewas.txt",
+#           "results2.tsh.con.ewas.txt",
+#           "results3.tsh.con.ewas.txt",
+#           "results4.tsh.con.ewas.txt",
+#           "results5.tsh.con.ewas.txt",
+#           "results6.tsh.con.ewas.txt",
+#           "tsh.con.ewas.txt",
+#           "tsh.con.add.cov.ewas.txt",
+#           "results9.tsh.con.ewas.txt",
+#           "results10.tsh.con.ewas.txt",
+#           "results10.rmot.tsh.con.ewas.txt")
+
+for(i in files){
+  
+  #i = "results1.tsh.con.ewas.txt"
+
+  filename <- gsub("\\.txt","",i)
+  if(i=="tsh.con.ewas.txt")filename="results7.tsh.con.ewas"
+  if(i=="tsh.con.add.cov.ewas.txt")filename="results8.tsh.con.ewas"
+
+  gwas_data <- fread(i) %>%
+    filter(!is.na(P),
+           is.finite(P))%>%
+    inner_join(annoEPIC,by=c("CpG"="Name"))
+  
+  gwas_data_1 <- gwas_data %>%
+    dplyr::mutate(P= as.numeric(as.character(P)),
+                  CHROM = as.numeric(as.character(chr)), 
+                  POS = as.numeric(as.character(pos)))%>%
+    na.omit()%>%
+    arrange(P)
+  
+  lambda <- P_lambda(gwas_data_1$P)
+  print(paste("lambda value of",filename,"is:",lambda))
+  
+  png(paste0(filename,".manhattan.png"), width = 10, height = 7, units = 'in', res = 300)
+  manhattan(gwas_data_1, chr = "CHROM", bp = "POS", p = "P", snp = "CpG",
+            genomewideline = -log10(0.05/nrow(gwas_data_1)),
+            suggestiveline = FALSE,
+            main=filename)
+  dev.off()
+  
+  png(paste0(filename,".qq.png"), width = 10, height = 7, units = 'in', res = 300)
+  qq(gwas_data_1$P,main=paste0("for ",filename,"\nlamda=",round(lambda,3)))
+  dev.off()
+}
+
+
+```
+
+```{r dmr analysis of selected models}
+
+setwd("~/ewas/tsh")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+#file = "tsh.con.ewas.txt"
+#file = "results1.tsh.con.ewas.txt"
+#file = "results9.tsh.con.ewas.txt"
+#file = "results10.tsh.con.ewas.txt"
+#file = "results1.rmot.tsh.con.ewas.txt"
+#file = "results10.rmot.tsh.con.ewas.txt"
+#file = "results_2021_1.tsh.con.ewas.txt"
+#file = "results_2021_2.tsh.cate.ewas.txt"
+#file = "results_2021_3.tsh.cate.new.ewas.txt"
+
+raw = fread(file) 
+raw1 = raw %>%
+  dplyr::rename("probe"="CpG") %>%
+  mutate(p = P) %>%
+  dplyr::select(probe,p) %>%
+  inner_join(annoEPIC,by="probe") %>%
+  mutate(chr=sub("chr","",chr))%>%
+  mutate(chr=as.numeric(chr),
+         start=as.numeric(start)) %>%  
+  arrange(chr,start)%>%
+  na.omit()
+if(length(which(raw1$p==0))!=0) raw1$p[which(raw1$p==0)] = min(raw1$p[-which(raw1$p==0)])/100
+
+ipdmr(raw1,
+      include.all.sig.sites=FALSE,
+      region_plot=TRUE,
+      mht_plot=FALSE)
+
+
+# model1: Number of identified DMR:  4
+# model1 removed outlier: 8
+# model7, without cov: Number of identified DMR:  13
+# model8, with cov: Number of identified DMR:  12
+# model9, Number of DMRs identified: 18 
+# model10, Number of DMRs identified: 25 
+# model10 removed outlier: 22
+# model 2022_1: 39
+# model 2022_2: 0
+# model 2022_3: 3
+
+file.figure = sub(".ewas.txt","",file) 
+if (file.exists("region_plot.pdf")) {
+ file.rename("region_plot.pdf", paste0(file.figure,"_region_plot.pdf"))
+} else {
+ cat("plotting seems to have failed")
+}
+
+dmr = read.csv("resu_ipdmr.csv") %>%
+  filter(nprobe>1)
+
+comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("chr"),
+                         start.field="start",
+                         end.field="end",
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+
+if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene')
+}
+
+comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+  dplyr::select(-strand)
+
+dmrs = comb_p_GR_DF %>%
+  mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+  as.data.frame()
+
+dmrs_1 = dmrs %>%
+  dplyr::select(seqnames,start,end,dmr_id)
+
+betasAll = fread(file) %>%
+  filter(!is.na(P))%>%
+  dplyr::select(CpG,Beta) %>%
+  left_join(annoEPIC,by=c("CpG"="probe"))
+
+DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("seqnames"),
+                         start.field="start",
+                         end.field=c("end"),
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("chr"),
+                         start.field="start",
+                         end.field=c("end"),
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+
+a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+  dplyr::select(dmr_id)
+b=betasAll[queryHits(overlap_DMR_Res),] 
+com = cbind(b,a) %>% 
+  as.data.frame() %>%
+  arrange(chr,start) %>%
+  group_by(dmr_id) %>%
+  summarise(mean_beta = mean(Beta))
+
+dmr_w_beta = dmrs %>%
+  left_join(com,by="dmr_id") %>%
+  dplyr::select(-dmr_id)
+
+file.meanB = sub("ewas.txt","dmr.wBeta.csv",file)
+write.csv(dmr_w_beta,file.meanB)
+
+
+```
+
+```{r annotate results}
+
+setwd("~/ewas/tsh")
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,strand,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,Regulatory_Feature_Group,
+                GencodeBasicV12_Group) 
+
+#file = "results1.tsh.con.ewas.txt"
+#file="tsh.con.ewas.txt"
+#file="tsh.con.add.cov.ewas.txt"
+#file = "results9.tsh.con.ewas.txt"
+#file = "results10.tsh.con.ewas.txt"
+#file = "results1.rmot.tsh.con.ewas.txt"
+#file = "results10.rmot.tsh.con.ewas.txt"
+#file = "results_2021_1.tsh.con.ewas.txt"
+#file = "results_2021_2.tsh.cate.ewas.txt"
+#file = "results_2021_3.tsh.cate.new.ewas.txt"
+
+anno0 = fread(file) %>%
+  left_join(annoEPIC,by=c("CpG"="cpg"))%>%
+  filter(!is.na(P))%>%
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf), chr!="chrX"&chr!="chrY") %>%
+  dplyr::select(-Probe_maf) %>%
+  mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
+  mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) %>%
+  arrange(P)
+
+anno1 = anno0[1:10,]
+write.csv(anno1,paste0("top10.cpgs.",gsub(".ewas.txt","",file),".csv"))
+
+```
+
+```{r target gene lookup}
+
+setwd("~/ewas/tsh")
+
+library(tidyverse)
+library(data.table)
+library(GenomicRanges)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,strand,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,Regulatory_Feature_Group,
+                GencodeBasicV12_Group,GencodeCompV12_Group) 
+
+regiobs = fread("raw/DS_thyroid_genes_UCSCoutput.csv") %>%
+  dplyr::select(Gene,Chr,startless2000bp,endplus2000bp) 
+  # %>% filter(Gene=="TRH")
+
+#file="tsh.con.ewas.txt"
+#file="tsh.con.add.cov.ewas.txt"
+#file = "results1.tsh.con.ewas.txt"
+#file = "results9.tsh.con.ewas.txt"
+#file = "results10.tsh.con.ewas.txt"
+#file = "results1.rmot.tsh.con.ewas.txt"
+#file = "results10.rmot.tsh.con.ewas.txt"
+#file = "results_2021_1.tsh.con.ewas.txt"
+#file = "results_2021_2.tsh.cate.ewas.txt"
+#file = "results_2021_3.tsh.cate.new.ewas.txt"
+
+outcomesS = fread(file) %>%
+  as.data.frame()%>%
+  filter(!is.na(P))%>%
+  left_join(annoEPIC,by=c("CpG"="cpg"))%>%
+  dplyr::select(CpG,Beta,P,chr,pos,strand,
+                Regulatory_Feature_Group,GencodeCompV12_Group)%>%
+  as.data.frame()
+
+targetDMR_GR <- makeGRangesFromDataFrame(regiobs, keep.extra.columns=T,
+                         ignore.strand=T,
+                         seqinfo=NULL,
+                         seqnames.field=c("Chr"),
+                         start.field="startless2000bp",
+                         end.field=c("endplus2000bp"),
+                         starts.in.df.are.0based=FALSE)
+# somatic probes only
+uscRes_GR <- makeGRangesFromDataFrame(outcomesS, keep.extra.columns=T,
+                         ignore.strand=F,
+                         seqinfo=NULL,
+                         seqnames.field=c("chr"),
+                         start.field="pos",
+                         end.field=c("pos"),
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+overlap_usc_thyroid <- GenomicRanges::findOverlaps(uscRes_GR,targetDMR_GR, ignore.strand=T)
+a=regiobs[subjectHits(overlap_usc_thyroid),]
+b=outcomesS[queryHits(overlap_usc_thyroid),] %>%
+  dplyr::select(-chr)
+outcomes_thyroid = cbind(a,b)%>%as.data.frame() %>%
+  distinct(CpG,.keep_all=TRUE)%>%
+  arrange(Chr,pos) %>%
+  mutate(p_val_fdr=p.adjust(P,method="fdr"))
+
+write.csv(outcomes_thyroid, paste0("outcomes.thyroid.lookup.",gsub(".ewas.txt","",file),".csv"))
+
+```
+
+```{r correlation plot of CpG and TSH level}
+
+setwd("~/ewas/tsh")
+library(tidyverse)
+library(data.table)
+
+cpgI = "cg06753273"
+
+methyl0.cov = read_rds("methSet.tsh.rds") %>% 
+  as.data.frame() %>%
+  filter(probeId==cpgI) %>%
+  column_to_rownames(var="probeId") %>%
+  t %>%
+  as.data.frame() %>%
+  rownames_to_column(var="subjectId")
+
+covs0.cov = read_rds("clinical.tsh.rds")%>%
+  as.data.frame()%>%
+  dplyr::select(subjectId,TSH_mIU_L) %>%
+  mutate(subjectId = as.character(subjectId))%>%
+  inner_join(methyl0.cov,by="subjectId")
+
+covs0.cov1 = covs0.cov %>%
+  filter(TSH_mIU_L<max(TSH_mIU_L))
+
+covs0.cov %>%
+  ggplot(aes(x=cg06753273,y=TSH_mIU_L))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_bw() + 
+  labs(x=paste0("Methylation of probe ",cpgI),y="TSH (mIU/L)")
+
+
+```
+
