@@ -1,0 +1,3726 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Project description: to investigate the associations between DNA methylation and birth order, combining datasets from multiple cohorts from 12 countries.
+
+This manuscript is in preparation.
+
+```{r updating files}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+neo = read.csv("sourceF/meth_bthdata_BC.csv") %>%
+  as.data.frame()%>%
+  dplyr::mutate(LiveBirthsNowLiving=as.numeric(as.character(LiveBirthsNowLiving)),
+         TerminationsBefore20Weeks=as.numeric(as.character(TerminationsBefore20Weeks)),
+         Terminations20WeeksPlus=as.numeric(as.character(Terminations20WeeksPlus)),
+         parity = as.numeric(as.character(parity))) %>%
+  dplyr::mutate(par_neo = LiveBirthsNowLiving+1,
+                mo_gravid_neo = LiveBirthsNowLiving+
+                  TerminationsBefore20Weeks+
+                  Terminations20WeeksPlus+1,
+                birth_order = 0,
+                preg_order = 0)
+
+for( i in 1:nrow(neo)){
+  if(is.na(neo$parity[i])){
+    neo$birth_order[i] = neo$par_neo[i]
+    neo$preg_order[i] = neo$mo_gravid_neo[i]
+  }else{
+    neo$birth_order[i] = as.numeric(as.character(neo$parity))[i]
+    neo$preg_order[i] = as.numeric(as.character(neo$mo_gravid_int))[i]
+  }}
+
+write.csv(neo,"sourceF/bthorder_meth_ph123_neo.csv")
+
+```
+# birthOrder analysis without genetic correction
+```{r ewas of birthorder}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+# load birthorder data 
+
+for(var in c("birth_order","preg_order")){
+  
+    # var = "birth_order"
+  
+  for(set in 1:4){
+  
+    #set=1
+  
+   if(set%in%c(1,2)){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       inner_join(bo, by="beadPosition")
+     
+     }
+    
+   if(set==3){
+    
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+         
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+       filter(Trisomy21==0)%>%
+       inner_join(bo, by="subjectId")
+     
+     }
+    
+   if(set==4){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       mutate(birth_order = as.numeric(as.character(parity)), 
+              preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+       select(beadPosition, birth_order, preg_order)
+  
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       filter(smp_type=="bg")%>%
+       inner_join(bo, by="beadPosition")
+    
+     }
+  
+    clinical1 = clinical0 %>% 
+      mutate(plate = as.factor(plate),
+             sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,one_of(var)) %>%
+      na.omit()
+    
+    rfs = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    genePC = read.table(paste0("~/mQTL/ccls.set",set,".pc.eigenvec"))
+    colnames(genePC) = c("FID","subjectId","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10")
+  
+    clinical2 = genePC %>%
+      inner_join(rfs, by="subjectId")
+  
+  
+  # load methylation data
+    
+    methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy) = c()
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+  
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+    
+    print(paste0("subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+
+    probes = colnames(methyDF)
+  
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$rc1 + 
+              cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + cF$rc7 + cF$rc8 +
+              cF$rc9 + cF$rc10 + cF$PC1 + cF$PC2 + cF$PC3 + cF$PC4 + cF$PC5 +
+              cF$PC6 + cF$PC7 + cF$PC8 + cF$PC8 + cF$PC9 + cF$PC10
+           ))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+  
+  }
+}
+
+```
+
+```{bash}
+
+cd ~/ewas/birthorder
+
+sed -i 's/Std. Error/SE/g' *.ewas.txt
+
+### 450K birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.birth_order.ewas.txt
+PROCESS set2.birth_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.450K.birth_order.ewas.txt
+
+### EPIC birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set3.birth_order.ewas.txt
+PROCESS set4.birth_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.EPIC.birth_order.ewas.txt
+
+### ALL birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.birth_order.ewas.txt
+PROCESS set2.birth_order.ewas.txt
+PROCESS set3.birth_order.ewas.txt
+PROCESS set4.birth_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.all.birth_order.ewas.txt
+
+### 450K preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.preg_order.ewas.txt
+PROCESS set2.preg_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.450K.preg_order.ewas.txt
+
+### EPIC preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set3.preg_order.ewas.txt
+PROCESS set4.preg_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.EPIC.preg_order.ewas.txt
+
+### ALL preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.preg_order.ewas.txt
+PROCESS set2.preg_order.ewas.txt
+PROCESS set3.preg_order.ewas.txt
+PROCESS set4.preg_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.all.preg_order.ewas.txt
+
+```
+
+```{r annotation}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(qvalue)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+for(platform in c("450K","EPIC","all")){
+  for(birth in c("preg_order","birth_order")){
+
+  meta = fread(paste0("meta.",platform,".",birth,".ewas.txt")) %>%
+    select(-Allele1, -Allele2) %>%
+    mutate(cpg = gsub("_.*$","",MarkerName),
+           snp = gsub("^.*_","",MarkerName)) %>%
+    arrange(by=`P-value`) %>%
+    mutate(qvalue = qvalue(`P-value`)$qvalues,
+           bonferroni = p.adjust(`P-value`, method = "bonferroni", n = length(`P-value`)),
+           fdr = p.adjust(`P-value`, method = "fdr", n = length(`P-value`))) %>%
+    filter(fdr < 0.05) %>%
+    left_join(anno,by="cpg") 
+
+  print(paste0(nrow(meta)," probes are significant for platform ",platform," for variable ",birth))
+
+  if(nrow(meta)>0) write.csv(meta,paste0(birth,".",platform,".sig.meta.csv"))
+  
+    }}
+
+```
+
+[1] "0 probes are significant for platform 450K for variable preg_order"
+[1] "0 probes are significant for platform 450K for variable birth_order"
+[1] "1 probes are significant for platform EPIC for variable preg_order"
+[1] "0 probes are significant for platform EPIC for variable birth_order"
+[1] "1 probes are significant for platform all for variable preg_order"
+[1] "4 probes are significant for platform all for variable birth_order"
+
+```{r plotting cg24567724 with birth order}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+cg = "cg24567724"
+
+for(set in c(3,4)){
+  for(birth in c("preg_order","birth_order")){
+
+    setN = paste0("set",set)
+    
+    if(set==3){
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+    
+    clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+     filter(Trisomy21==0)%>%
+     inner_join(bo, by="subjectId") %>%
+     select(beadPosition,one_of(birth))
+      
+    }
+
+    if(set==4){
+   bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123.csv") %>%
+     filter(set == setN)%>%
+      mutate(birth_order = as.numeric(as.character(parity)), 
+      preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+      na.omit() %>%
+      select(beadPosition, one_of(birth))
+   
+   clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+     filter(smp_type=="bg")%>%
+     inner_join(bo, by="beadPosition")%>%
+     select(beadPosition,one_of(birth))
+    }
+    
+
+    methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds")) 
+
+    methy1 = methy[methy$probeId == cg,] 
+    rownames(methy1) <- c()
+    
+    methy2 = methy1 %>%
+      column_to_rownames(var="probeId") %>%
+      t %>%
+      as.data.frame() %>%
+      na.omit()%>%
+      rownames_to_column(var="beadPosition") %>%
+      inner_join(clinical0,by="beadPosition") 
+    
+    methy2[,birth] = as.factor(methy2[,birth])
+      
+    
+    methy2 %>%
+      ggplot(aes_string(x=birth,y=cg)) +
+      geom_point()+
+      geom_smooth(method=lm)+
+      theme_bw()+
+      labs(x=birth,y=paste(cg,"methylation"))+
+      ggtitle(paste("Correlation between",cg,"methylation and",birth))+
+      theme(plot.title = element_text(hjust = 0.5))
+    ggsave(paste0("set",set,".",birth,".",cg,".png"),width = 8, height = 6)
+
+     methy2 %>%
+      ggplot(aes_string(x=birth,y=cg)) +
+      geom_violin(trim=FALSE)+
+      theme_bw()+
+      labs(x=birth,y=paste(cg,"methylation"))+
+      ggtitle(paste("Correlation between",cg,"methylation and",birth))+
+      theme(plot.title = element_text(hjust = 0.5))
+    ggsave(paste0("set",set,".",birth,".",cg,".violin.png"),width = 8, height = 6)
+
+
+  }}
+
+
+```
+
+# birthOrder analysis correcting for birth related variables, without genetic correction
+
+```{r ewas of birthorder, correcting for vars}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+# load birthorder data 
+
+for(var in c("birth_order","preg_order")){
+  
+  # var = "birth_order"
+
+  for(set in 1:4){
+  
+    #set=1
+  
+   if(set%in%c(1,2)){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       inner_join(bo, by="beadPosition")
+     
+     }
+    
+   if(set==3){
+    
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+         
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+       filter(Trisomy21==0)%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=Y_birthweight,
+              gestage=Y_gestation_week)%>%
+       inner_join(bo, by="subjectId")
+     
+     }
+    
+   if(set==4){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       mutate(birth_order = as.numeric(as.character(parity)), 
+              preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+       select(beadPosition, birth_order, preg_order)
+  
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       filter(smp_type=="bg")%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=ch_birthwt_bc_full,
+              gestage=ch_gestage_int)%>%
+       inner_join(bo, by="beadPosition")
+    
+     }
+  
+    clinical1 = clinical0 %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,birthWt,gestage,one_of(var)) %>%
+      na.omit()
+    
+    rfs = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    genePC = read.table(paste0("~/mQTL/ccls.set",set,".pc.eigenvec"))
+    colnames(genePC) = c("FID","subjectId","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10")
+  
+    clinical2 = genePC %>%
+      inner_join(rfs, by="subjectId")
+  
+  
+  # load methylation data
+    
+    methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy) = c()
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+  
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+      
+    probes = colnames(methyDF)
+  
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$gestage + cF$birthWt + cF$rc1 + 
+              cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + cF$rc7 + cF$rc8 +
+              cF$rc9 + cF$rc10 + cF$PC1 + cF$PC2 + cF$PC3 + cF$PC4 + cF$PC5 +
+              cF$PC6 + cF$PC7 + cF$PC8 + cF$PC8 + cF$PC9 + cF$PC10
+           ))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("set",set,".",var,".vars.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+  }
+}
+
+```
+
+```{bash}
+
+cd ~/ewas/birthorder
+
+sed -i 's/Std. Error/SE/g' *.vars.ewas.txt
+
+### 450K birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.birth_order.vars.ewas.txt
+PROCESS set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.450K.birth_order.vars.ewas.txt
+
+### EPIC birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set3.birth_order.vars.ewas.txt
+PROCESS set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.EPIC.birth_order.vars.ewas.txt
+
+### ALL birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.birth_order.vars.ewas.txt
+PROCESS set2.birth_order.vars.ewas.txt
+PROCESS set3.birth_order.vars.ewas.txt
+PROCESS set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.all.birth_order.vars.ewas.txt
+
+### 450K preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.preg_order.vars.ewas.txt
+PROCESS set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.450K.preg_order.vars.ewas.txt
+
+### EPIC preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set3.preg_order.vars.ewas.txt
+PROCESS set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.EPIC.preg_order.vars.ewas.txt
+
+### ALL preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS set1.preg_order.vars.ewas.txt
+PROCESS set2.preg_order.vars.ewas.txt
+PROCESS set3.preg_order.vars.ewas.txt
+PROCESS set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL meta.all.preg_order.vars.ewas.txt
+
+```
+
+meta.450K.birth_order.vars: Smallest p-value is 1.87e-06 at marker 'cg01396391'
+meta.EPIC.birth_order.vars: Smallest p-value is 6.402e-07 at marker 'cg03536404'
+meta.all.birth_order.vars: Smallest p-value is 8.48e-08 at marker 'cg27293155'
+
+```{r annotation}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(qvalue)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+for(platform in c("450K","EPIC","all")){
+  for(birth in c("preg_order","birth_order")){
+
+  meta = fread(paste0("meta.",platform,".",birth,".vars.ewas.txt")) %>%
+    select(-Allele1, -Allele2) %>%
+    mutate(cpg = gsub("_.*$","",MarkerName),
+           snp = gsub("^.*_","",MarkerName)) %>%
+    arrange(by=`P-value`) %>%
+    mutate(qvalue = qvalue(`P-value`)$qvalues,
+           bonferroni = p.adjust(`P-value`, method = "bonferroni", n = length(`P-value`)),
+           fdr = p.adjust(`P-value`, method = "fdr", n = length(`P-value`))) %>%
+    filter(fdr < 0.05) %>%
+    left_join(anno,by="cpg") 
+
+  print(paste0(nrow(meta)," probes are significant for platform ",platform," for variable ",birth))
+
+  if(nrow(meta)>0) write.csv(meta,paste0(birth,".",platform,".sig.vars.meta.csv"))
+  
+    }}
+
+```
+[1] "0 probes are significant for platform 450K for variable preg_order"
+[1] "0 probes are significant for platform 450K for variable birth_order"
+[1] "0 probes are significant for platform EPIC for variable preg_order"
+[1] "0 probes are significant for platform EPIC for variable birth_order"
+[1] "0 probes are significant for platform all for variable preg_order"
+[1] "0 probes are significant for platform all for variable birth_order"
+# birthOrder analysis correcting for birth related variables, by ancestry
+```{r ewas of birthorder, correcting for vars}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+# load birthorder data 
+
+for(var in c("birth_order","preg_order")){
+  
+  # var = "birth_order"
+
+  for(set in 1:4){
+  
+    #set=1
+  
+   if(set%in%c(1,2)){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       inner_join(bo, by="beadPosition") 
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==3){
+    
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+         
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+       filter(Trisomy21==0)%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=Y_birthweight,
+              gestage=Y_gestation_week)%>%
+       inner_join(bo, by="subjectId")
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==4){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       mutate(birth_order = as.numeric(as.character(parity)), 
+              preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+       select(beadPosition, birth_order, preg_order)
+  
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       filter(smp_type=="bg")%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=ch_birthwt_bc_full,
+              gestage=ch_gestage_int)%>%
+       inner_join(bo, by="beadPosition")
+
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+    
+     }
+  
+    
+    # load methylation data
+    
+    methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy) = c()
+    
+    # EUR  
+    race="eur"
+    
+    clinical1 = clinical_eur %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,birthWt,gestage,one_of(var)) %>%
+      na.omit()
+    
+    rfs = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    genePC = read.table(paste0("~/mQTL/ccls.set",set,".pc.eigenvec"))
+    colnames(genePC) = c("FID","subjectId","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10")
+  
+    clinical2 = genePC %>%
+      inner_join(rfs, by="subjectId")
+  
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+  
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+
+    print(paste0("subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+      
+    probes = colnames(methyDF)
+  
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$gestage + cF$birthWt + cF$rc1 + 
+              cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + cF$rc7 + cF$rc8 +
+              cF$rc9 + cF$rc10 + cF$PC1 + cF$PC2 + cF$PC3 + cF$PC4 + cF$PC5 +
+              cF$PC6 + cF$PC7 + cF$PC8 + cF$PC8 + cF$PC9 + cF$PC10
+           ))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0(race,".set",set,".",var,".vars.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+    
+    
+    # LAT  
+    race="lat"
+    
+    clinical1 = clinical_lat %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,birthWt,gestage,one_of(var)) %>%
+      na.omit()
+    
+    rfs = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    genePC = read.table(paste0("~/mQTL/ccls.set",set,".pc.eigenvec"))
+    colnames(genePC) = c("FID","subjectId","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10")
+    
+    clinical2 = genePC %>%
+      inner_join(rfs, by="subjectId")
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+    
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+      
+    print(paste0("subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+    
+    probes = colnames(methyDF)
+    
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$gestage + cF$birthWt + cF$rc1 + 
+              cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + cF$rc7 + cF$rc8 +
+              cF$rc9 + cF$rc10 + cF$PC1 + cF$PC2 + cF$PC3 + cF$PC4 + cF$PC5 +
+              cF$PC6 + cF$PC7 + cF$PC8 + cF$PC8 + cF$PC9 + cF$PC10
+           ))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0(race,".set",set,".",var,".vars.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+  }
+}
+
+```
+
+```{bash}
+
+cd ~/ewas/birthorder
+
+sed -i 's/Std. Error/SE/g' *.vars.ewas.txt
+
+### 450K birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.birth_order.vars.ewas.txt
+PROCESS eur.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.450K.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set1.birth_order.vars.ewas.txt
+PROCESS lat.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.450K.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.birth_order.vars.ewas.txt
+PROCESS eur.set2.birth_order.vars.ewas.txt
+PROCESS lat.set1.birth_order.vars.ewas.txt
+PROCESS lat.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.450K.birth_order.vars.ewas.txt
+
+### EPIC birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set3.birth_order.vars.ewas.txt
+PROCESS eur.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.EPIC.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set3.birth_order.vars.ewas.txt
+PROCESS lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.EPIC.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set3.birth_order.vars.ewas.txt
+PROCESS eur.set4.birth_order.vars.ewas.txt
+PROCESS lat.set3.birth_order.vars.ewas.txt
+PROCESS lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.EPIC.birth_order.vars.ewas.txt
+
+### ALL birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.birth_order.vars.ewas.txt
+PROCESS eur.set2.birth_order.vars.ewas.txt
+PROCESS eur.set3.birth_order.vars.ewas.txt
+PROCESS eur.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.all.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set1.birth_order.vars.ewas.txt
+PROCESS lat.set2.birth_order.vars.ewas.txt
+PROCESS lat.set3.birth_order.vars.ewas.txt
+PROCESS lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.all.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.birth_order.vars.ewas.txt
+PROCESS eur.set2.birth_order.vars.ewas.txt
+PROCESS eur.set3.birth_order.vars.ewas.txt
+PROCESS eur.set4.birth_order.vars.ewas.txt
+PROCESS lat.set1.birth_order.vars.ewas.txt
+PROCESS lat.set2.birth_order.vars.ewas.txt
+PROCESS lat.set3.birth_order.vars.ewas.txt
+PROCESS lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.all.birth_order.vars.ewas.txt
+
+
+
+### 450K preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.preg_order.vars.ewas.txt
+PROCESS eur.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.450K.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set1.preg_order.vars.ewas.txt
+PROCESS lat.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.450K.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.preg_order.vars.ewas.txt
+PROCESS eur.set2.preg_order.vars.ewas.txt
+PROCESS lat.set1.preg_order.vars.ewas.txt
+PROCESS lat.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.450K.preg_order.vars.ewas.txt
+
+### EPIC preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set3.preg_order.vars.ewas.txt
+PROCESS eur.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.EPIC.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set3.preg_order.vars.ewas.txt
+PROCESS lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.EPIC.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set3.preg_order.vars.ewas.txt
+PROCESS eur.set4.preg_order.vars.ewas.txt
+PROCESS lat.set3.preg_order.vars.ewas.txt
+PROCESS lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.EPIC.preg_order.vars.ewas.txt
+
+### ALL preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.preg_order.vars.ewas.txt
+PROCESS eur.set2.preg_order.vars.ewas.txt
+PROCESS eur.set3.preg_order.vars.ewas.txt
+PROCESS eur.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL eur.meta.all.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS lat.set1.preg_order.vars.ewas.txt
+PROCESS lat.set2.preg_order.vars.ewas.txt
+PROCESS lat.set3.preg_order.vars.ewas.txt
+PROCESS lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL lat.meta.all.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS eur.set1.preg_order.vars.ewas.txt
+PROCESS eur.set2.preg_order.vars.ewas.txt
+PROCESS eur.set3.preg_order.vars.ewas.txt
+PROCESS eur.set4.preg_order.vars.ewas.txt
+PROCESS lat.set1.preg_order.vars.ewas.txt
+PROCESS lat.set2.preg_order.vars.ewas.txt
+PROCESS lat.set3.preg_order.vars.ewas.txt
+PROCESS lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL byrace.meta.all.preg_order.vars.ewas.txt
+
+
+
+
+```
+
+```{r annotation}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(qvalue)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+for(platform in c("450K","EPIC","all")){
+  for(birth in c("preg_order","birth_order")){
+    for(race in c("eur","lat","byrace")){
+
+  meta = fread(paste0(race,".meta.",platform,".",birth,".vars.ewas.txt")) %>%
+    select(-Allele1, -Allele2) %>%
+    mutate(cpg = gsub("_.*$","",MarkerName),
+           snp = gsub("^.*_","",MarkerName)) %>%
+    arrange(by=`P-value`) %>%
+    mutate(qvalue = qvalue(`P-value`)$qvalues,
+           bonferroni = p.adjust(`P-value`, method = "bonferroni", n = length(`P-value`)),
+           fdr = p.adjust(`P-value`, method = "fdr", n = length(`P-value`))) %>%
+    filter(fdr < 0.05) %>%
+    left_join(anno,by="cpg") 
+
+  print(paste0(nrow(meta)," probes are significant for platform ",platform," for variable ",birth))
+
+  if(nrow(meta)>0) write.csv(meta,paste0(birth,".",platform,".sig.vars.meta.csv"))
+  
+    }}}
+
+```
+
+# birthOrder analysis correcting for birth related variables, by ancestry, no ancestry PCs
+
+```{r ewas of birthorder, correcting for vars}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+# load birthorder data 
+
+for(var in c("birth_order","preg_order")){
+  
+  # var = "birth_order"
+
+  for(set in 1:4){
+  
+    #set=1
+  
+   if(set%in%c(1,2)){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       inner_join(bo, by="beadPosition") 
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==3){
+    
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+         
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+       filter(Trisomy21==0)%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=Y_birthweight,
+              gestage=Y_gestation_week)%>%
+       inner_join(bo, by="subjectId")
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==4){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       mutate(birth_order = as.numeric(as.character(parity)), 
+              preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+       select(beadPosition, birth_order, preg_order)
+  
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       filter(smp_type=="bg")%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=ch_birthwt_bc_full,
+              gestage=ch_gestage_int)%>%
+       inner_join(bo, by="beadPosition")
+
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+    
+     }
+  
+    
+    # load methylation data
+    
+    methy = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy) = c()
+    
+    # EUR  
+    race="eur"
+    
+    clinical1 = clinical_eur %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,birthWt,gestage,one_of(var)) %>%
+      na.omit()
+    
+    clinical2 = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+  
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+
+    print(paste0("no PC, subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("no PC, probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+      
+    probes = colnames(methyDF)
+  
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$gestage + 
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".vars.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+    
+    
+    # LAT  
+    race="lat"
+    
+    clinical1 = clinical_lat %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,sex,plate,birthWt,gestage,one_of(var)) %>%
+      na.omit()
+    
+    clinical2 = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+    
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+      
+    print(paste0("no PC, subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("no PC, probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+    
+    probes = colnames(methyDF)
+    
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$plate + cF$gestage + 
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".vars.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+  }
+}
+
+```
+
+```{bash}
+
+cd ~/ewas/birthorder
+
+sed -i 's/Std. Error/SE/g' *.vars.ewas.txt
+
+### 450K birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.450K.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set1.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.450K.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set2.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set1.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set2.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.450K.birth_order.vars.ewas.txt
+
+### EPIC birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set3.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.EPIC.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set3.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.EPIC.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set3.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set4.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set3.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.EPIC.birth_order.vars.ewas.txt
+
+### ALL birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set2.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set3.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.all.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set1.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set2.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set3.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.all.birth_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set2.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set3.birth_order.vars.ewas.txt
+PROCESS noPC.eur.set4.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set1.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set2.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set3.birth_order.vars.ewas.txt
+PROCESS noPC.lat.set4.birth_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.all.birth_order.vars.ewas.txt
+
+
+
+### 450K preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.450K.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set1.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.450K.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set2.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set1.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set2.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.450K.preg_order.vars.ewas.txt
+
+### EPIC preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set3.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.EPIC.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set3.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.EPIC.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set3.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set4.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set3.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.EPIC.preg_order.vars.ewas.txt
+
+### ALL preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set2.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set3.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.eur.meta.all.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.lat.set1.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set2.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set3.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.lat.meta.all.preg_order.vars.ewas.txt
+
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set2.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set3.preg_order.vars.ewas.txt
+PROCESS noPC.eur.set4.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set1.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set2.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set3.preg_order.vars.ewas.txt
+PROCESS noPC.lat.set4.preg_order.vars.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.byrace.meta.all.preg_order.vars.ewas.txt
+
+
+```
+
+```{r annotation}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(qvalue)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC       <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+for(platform in c("450K","EPIC","all")){
+  for(birth in c("preg_order","birth_order")){
+    for(race in c("eur","lat","byrace")){
+
+  meta = fread(paste0("noPC.",race,".meta.",platform,".",birth,".vars.ewas.txt")) %>%
+    select(-Allele1, -Allele2) %>%
+    mutate(cpg = gsub("_.*$","",MarkerName),
+           snp = gsub("^.*_","",MarkerName)) %>%
+    arrange(by=`P-value`) %>%
+    mutate(qvalue = qvalue(`P-value`)$qvalues,
+           bonferroni = p.adjust(`P-value`, method = "bonferroni", n = length(`P-value`)),
+           fdr = p.adjust(`P-value`, method = "fdr", n = length(`P-value`))) %>%
+    filter(fdr < 0.05) %>%
+    left_join(anno,by="cpg") 
+
+  print("noPC, ",paste0(nrow(meta)," probes are significant for platform ",platform," for variable ",birth))
+
+  if(nrow(meta)>0) write.csv(meta,paste0("noPC.",birth,".",platform,".sig.vars.meta.csv"))
+  
+    }}}
+
+```
+
+# birthOrder analysis correcting for birth related variables, by ancestry, no ancestry PCs, after talking with Stephenie London
+
+```{r ewas of birthorder, correcting for vars}
+
+#variables to include in the regression:
+##proportional birthweight = birthweight/gestational age ?
+##selection factor, caco
+##maternal smoking: smoke_mo_preg
+##plate, or batch
+##sex
+##10 cell proportion PCs/ cell proportions
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(DescTools)
+
+# load birthorder data 
+
+for(var in c("birth_order","preg_order")){
+  
+  # var = "birth_order"
+
+  for(set in 1:2){
+  
+    #set=1
+  
+   if(set%in%c(1,2)){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       inner_join(bo, by="beadPosition") 
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==3){
+    
+    bo = read.csv("~/ewas/birthorder/sourceF/birthOrderRawS3.csv") %>%
+       select(subjectId, birth_order, preg_order)
+         
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>% 
+       filter(Trisomy21==0)%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=Y_birthweight,
+              gestage=Y_gestation_week)%>%
+       inner_join(bo, by="subjectId")
+     
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+     
+     }
+    
+   if(set==4){
+     
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       mutate(birth_order = as.numeric(as.character(parity)), 
+              preg_order = as.numeric(as.character(mo_gravid_int))) %>%
+       select(beadPosition, birth_order, preg_order)
+  
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       filter(smp_type=="bg")%>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       mutate(birthWt=ch_birthwt_bc_full,
+              gestage=ch_gestage_int)%>%
+       inner_join(bo, by="beadPosition")
+
+     clinical_eur = clinical0 %>% dplyr::filter(race==1)
+     clinical_lat = clinical0 %>% dplyr::filter(race==3)
+    
+     }
+  
+    # load methylation data
+    
+    methy0 = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy0) = c()
+
+    #methyt = methy0[1:100,1:100]
+    
+    # Winsorize beta values
+    methy<-lapply(methy0[,-1], Winsorize, probs = c(0.005, 0.995), na.rm = FALSE) %>%
+      do.call(cbind,.) %>%
+      as.data.frame()
+    
+    methy$probeId = methy0$probeId
+
+  ################################################################    
+  # check correlation between birthWt and gestage    
+  print("correlation between gestage and birth weight in Eur")  
+  cor.test(clinical_eur$gestage,clinical_eur$birthWt)
+  print("correlation between gestage and birth weight in Lat")  
+  cor.test(clinical_lat$gestage,clinical_lat$birthWt)    
+  ################################################################    
+    
+    # EUR  
+    race="eur"
+    
+    clinical1 = clinical_eur %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,caco,sex,plate,birthWt,gestage,smoke_mo_preg,one_of(var)) %>%
+      na.omit()
+    
+    clinical2 = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+  
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+    
+    print(paste0("no PC, subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("no PC, probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+      
+    probes = colnames(methyDF)
+  
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg +
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+    ###### binary variable
+    
+    cF$bina = 1
+    cF[which(cF[,var]==1),"bina"] = 0 
+    
+    reg1 <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF$bina + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".binary.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+        
+  ################################################################    
+  # gestage only
+    
+    reg <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF[ ,var] + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".gestaOnly.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+
+  reg1 <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF$bina + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".gestaOnly.binary.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+  
+  ################################################################    
+  # birthweight only
+  
+    reg <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF[ ,var] + cF$sex+ cF$caco + cF$plate + cF$birthWt + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".birthWtOnly.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+
+  reg1 <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF$bina + cF$sex + cF$caco+ cF$plate + cF$birthWt + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".birthWtOnly.binary.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+    
+  
+##############################################################################################################
+##############################################################################################################
+    
+    # LAT  
+    race="lat"
+    
+    clinical1 = clinical_lat %>% 
+      mutate(sex = as.factor(sex)) %>%
+      select(beadPosition,subjectId,caco,sex,plate,birthWt,gestage,smoke_mo_preg,one_of(var)) %>%
+      na.omit()
+    
+    clinical2 = read.csv(paste0("~/sets/set",set,"/glintControl.csv")) %>%
+      select(beadPosition,rc1,rc2,rc3,rc4,rc5,rc6,rc7,rc8,rc9,rc10) %>%
+      inner_join(clinical1, by="beadPosition")
+    
+    subs = intersect(colnames(methy)[-1],as.character(clinical2$beadPosition))
+    
+    methyDF = methy[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      t()%>%
+      as.data.frame()
+    
+    clinical3 = clinical2 %>%
+      column_to_rownames(var="beadPosition")
+    
+    cF = clinical3[subs, ]
+      
+    print(paste0("no PC, subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("no PC, probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+    
+    probes = colnames(methyDF)
+    
+    reg <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF[ ,var] + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+  ###### binary variable
+    
+    cF$bina = 1
+    cF[which(cF[,var]==1),"bina"] = 0 
+    
+    reg1 <- lapply(probes,function(probe){
+      c(data.frame(CpG=probe),summary(
+        lm(methyDF[,probe] ~ cF$bina + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+             cF$birthWt + cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+             cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+    
+    reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+    
+    write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".binary.ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)      
+    
+    
+  ################################################################    
+  # gestage only
+    
+    reg <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF[ ,var] + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".gestaOnly.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+
+  reg1 <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF$bina + cF$sex+ cF$caco + cF$plate + cF$gestage + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".gestaOnly.binary.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+  
+  ################################################################    
+  # birthweight only
+  
+    reg <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco+ cF$plate + cF$birthWt + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg_1,paste0("noPC.",race,".set",set,".",var,".birthWtOnly.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+
+  reg1 <- lapply(probes,function(probe){
+    c(data.frame(CpG=probe),summary(
+      lm(methyDF[,probe] ~ cF$bina + cF$sex+ cF$caco + cF$plate + cF$birthWt + cF$smoke_mo_preg + 
+           cF$rc1 + cF$rc2 + cF$rc3 + cF$rc4 + cF$rc5 + cF$rc6 + 
+           cF$rc7 + cF$rc8 + cF$rc9 + cF$rc10))$coefficients[2,c(1,2,4)])})
+  
+  reg1_1 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+  
+  write.table(reg1_1,paste0("noPC.",race,".set",set,".",var,".birthWtOnly.binary.ewas.txt"),
+              quote=FALSE,
+              sep='\t',
+              row.names = FALSE, 
+              col.names = TRUE)  
+ 
+  }
+}
+
+
+
+
+```
+
+#linear
+noPC.eur.set1.birth_order.ewas.txt
+noPC.eur.set2.birth_order.ewas.txt
+noPC.lat.set1.birth_order.ewas.txt
+noPC.lat.set2.birth_order.ewas.txt
+
+noPC.eur.set1.preg_order.ewas.txt
+noPC.eur.set2.preg_order.ewas.txt
+noPC.lat.set1.preg_order.ewas.txt
+noPC.lat.set2.preg_order.ewas.txt
+
+#logistic
+noPC.eur.set1.birth_order.binary.ewas.txt
+noPC.eur.set2.birth_order.binary.ewas.txt
+noPC.lat.set1.birth_order.binary.ewas.txt
+noPC.lat.set2.birth_order.binary.ewas.txt
+
+noPC.eur.set1.preg_order.binary.ewas.txt
+noPC.eur.set2.preg_order.binary.ewas.txt
+noPC.lat.set1.preg_order.binary.ewas.txt
+noPC.lat.set2.preg_order.binary.ewas.txt
+
+#gestage only
+noPC.eur.set1.birth_order.gestaOnly.ewas.txt
+noPC.eur.set2.birth_order.gestaOnly.ewas.txt
+noPC.lat.set1.birth_order.gestaOnly.ewas.txt
+noPC.lat.set2.birth_order.gestaOnly.ewas.txt
+
+noPC.eur.set1.preg_order.gestaOnly.ewas.txt
+noPC.eur.set2.preg_order.gestaOnly.ewas.txt
+noPC.lat.set1.preg_order.gestaOnly.ewas.txt
+noPC.lat.set2.preg_order.gestaOnly.ewas.txt
+
+#birthweight only
+noPC.eur.set1.birth_order.birthWtOnly.ewas.txt
+noPC.eur.set2.birth_order.birthWtOnly.ewas.txt
+noPC.lat.set1.birth_order.birthWtOnly.ewas.txt
+noPC.lat.set2.birth_order.birthWtOnly.ewas.txt
+
+noPC.eur.set1.preg_order.birthWtOnly.ewas.txt
+noPC.eur.set2.preg_order.birthWtOnly.ewas.txt
+noPC.lat.set1.preg_order.birthWtOnly.ewas.txt
+noPC.lat.set2.preg_order.birthWtOnly.ewas.txt
+
+```{bash}
+
+cd ~/ewas/birthorder
+
+sed -i 's/Std. Error/SE/g' *.ewas.txt
+
+### 450K birth_order linear
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.ewas.txt
+PROCESS noPC.eur.set2.birth_order.ewas.txt
+PROCESS noPC.lat.set1.birth_order.ewas.txt
+PROCESS noPC.lat.set2.birth_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.birth_order.lin.ewas.txt
+
+### 450K preg_order linear
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.ewas.txt
+PROCESS noPC.eur.set2.preg_order.ewas.txt
+PROCESS noPC.lat.set1.preg_order.ewas.txt
+PROCESS noPC.lat.set2.preg_order.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.preg_order.lin.ewas.txt
+
+### 450K birth_order binary
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.binary.ewas.txt
+PROCESS noPC.eur.set2.birth_order.binary.ewas.txt
+PROCESS noPC.lat.set1.birth_order.binary.ewas.txt
+PROCESS noPC.lat.set2.birth_order.binary.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.birth_order.bin.ewas.txt
+
+### 450K preg_order binary
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.binary.ewas.txt
+PROCESS noPC.eur.set2.preg_order.binary.ewas.txt
+PROCESS noPC.lat.set1.preg_order.binary.ewas.txt
+PROCESS noPC.lat.set2.preg_order.binary.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.preg_order.bin.ewas.txt
+
+
+#gestage only, birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.birth_order.gestaOnly.ewas.txt
+PROCESS noPC.eur.set2.birth_order.gestaOnly.ewas.txt
+PROCESS noPC.lat.set1.birth_order.gestaOnly.ewas.txt
+PROCESS noPC.lat.set2.birth_order.gestaOnly.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.birth_order.gestaOnly.bin.ewas.txt
+
+#gestage only, preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCESS noPC.eur.set1.preg_order.gestaOnly.ewas.txt
+PROCESS noPC.eur.set2.preg_order.gestaOnly.ewas.txt
+PROCESS noPC.lat.set1.preg_order.gestaOnly.ewas.txt
+PROCESS noPC.lat.set2.preg_order.gestaOnly.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.preg_order.gestaOnly.bin.ewas.txt
+
+#birthweight only, birth_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCES noPC.eur.set1.birth_order.birthWtOnly.ewas.txt
+PROCES noPC.eur.set2.birth_order.birthWtOnly.ewas.txt
+PROCES noPC.lat.set1.birth_order.birthWtOnly.ewas.txt
+PROCES noPC.lat.set2.birth_order.birthWtOnly.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.birth_order.birthWtOnly.bin.ewas.txt
+
+#birthweight only, preg_order
+metal
+MARKER CpG
+EFFECT Estimate
+PVALUE `Pr(>|t|)`
+SCHEME STDERR
+STDERR SE
+VERBOSE OFF
+GENOMICCONTROL OFF
+STDERR_PRINT_PRECISION 20
+EFFECT_PRINT_PRECISION 20
+PROCES noPC.eur.set1.preg_order.birthWtOnly.ewas.txt
+PROCES noPC.eur.set2.preg_order.birthWtOnly.ewas.txt
+PROCES noPC.lat.set1.preg_order.birthWtOnly.ewas.txt
+PROCES noPC.lat.set2.preg_order.birthWtOnly.ewas.txt
+ANALYZE
+QUIT
+mv METAANALYSIS1.TBL noPC.meta.450K.preg_order.birthWtOnly.bin.ewas.txt
+```
+
+```{r annotation}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(qvalue)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+anno       <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name)
+
+
+
+for(method in c("lin","bin","birthWtOnly.bin","gestaOnly.bin")){
+  for(birth in c("preg_order","birth_order")){
+
+  meta = fread(paste0("noPC.meta.450K.",birth,".",method,".ewas.txt")) %>%
+    select(-Allele1, -Allele2) %>%
+    mutate(cpg = gsub("_.*$","",MarkerName),
+           snp = gsub("^.*_","",MarkerName)) %>%
+    arrange(by=`P-value`) %>%
+    mutate(qvalue = qvalue(`P-value`)$qvalues,
+           bonferroni = p.adjust(`P-value`, method = "bonferroni", n = length(`P-value`)),
+           fdr = p.adjust(`P-value`, method = "fdr", n = length(`P-value`))) %>%
+    filter(fdr < 0.05) %>%
+    left_join(anno,by="cpg") %>%
+    as.data.frame()
+
+  paste0(nrow(meta)," probes are significant for method ",method," for variable ",birth)
+
+  if(nrow(meta)>0) write.csv(meta,paste0("noPC.meta.450K.",birth,".",method,".sig.ewas.txt"))
+  
+    }}
+
+
+method="bin"
+birth="preg_order"
+
+meta = fread(paste0("noPC.meta.450K.",birth,".",method,".ewas.txt")) %>%
+  select(-Allele1, -Allele2) %>%
+  mutate(cpg = gsub("_.*$","",MarkerName),
+         snp = gsub("^.*_","",MarkerName)) %>%
+  arrange(by=`P-value`) %>%
+  left_join(anno,by="cpg") %>%
+  as.data.frame()
+metaTop = meta[1:20,]
+write.csv(metaTop,"topPreg_orderCpGsBinary.csv")
+
+birth="birth_order"
+
+meta = fread(paste0("noPC.meta.450K.",birth,".",method,".ewas.txt")) %>%
+  select(-Allele1, -Allele2) %>%
+  mutate(cpg = gsub("_.*$","",MarkerName),
+         snp = gsub("^.*_","",MarkerName)) %>%
+  arrange(by=`P-value`) %>%
+  left_join(anno,by="cpg") %>%
+  as.data.frame()
+metaTop = meta[1:20,]
+write.csv(metaTop,"topBirth_orderCpGsBinary.csv")
+
+```
+
+[1] "0 probes are significant for method lin for variable preg_order"
+[1] "0 probes are significant for method lin for variable birth_order"
+[1] "0 probes are significant for method bin for variable preg_order"
+[1] "0 probes are significant for method bin for variable birth_order"
+[1] "0 probes are significant for method birthWtOnly.bin for variable preg_order"
+[1] "0 probes are significant for method birthWtOnly.bin for variable birth_order"
+[1] "0 probes are significant for method gestaOnly.bin for variable preg_order"
+[1] "0 probes are significant for method gestaOnly.bin for variable birth_order"
+
+```{r if changing covariates changes the rank}
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+
+# birth_order
+
+bthVar = fread("noPC.meta.450K.birth_order.bin.ewas.txt") %>%
+  arrange(`P-value`)%>%
+  mutate(rankBoth = rank(`P-value`),
+         EffectBoth=Effect) %>%
+  select(MarkerName,rankBoth,EffectBoth)
+
+bthGesta = fread("noPC.meta.450K.birth_order.gestaOnly.bin.ewas.txt") %>%
+  mutate(rankGesta = rank(`P-value`),
+         EffectGesta=Effect) %>%
+  select(MarkerName,rankGesta,EffectGesta)
+
+bthBirW = fread("noPC.meta.450K.birth_order.birthWtOnly.bin.ewas.txt") %>%
+  mutate(rankBirW = rank(`P-value`),
+         EffectBirthW=Effect) %>%
+  select(MarkerName,rankBirW,EffectBirthW)
+
+bthVar1k = bthVar[1:1000,]
+
+bthVar %>%
+  inner_join(bthGesta,by="MarkerName")%>%
+  ggplot(aes(x=EffectBoth,y=EffectGesta))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_classic() +
+  ggtitle("Effects of CpGs in BO regression")+
+  xlab("CpG effect in models including both GestA and BirthW") +
+  ylab("CpG effect in models including only GestA") +
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("effectCompBothGesta.png",width = 8,height = 6)
+
+
+bthVar %>%
+  inner_join(bthBirW,by="MarkerName")%>%
+  ggplot(aes(x=EffectBoth,y=EffectBirthW))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_classic() +
+  ggtitle("Effects of CpGs in BO regression")+
+  xlab("CpG effect in models including both GestA and BirthW") +
+  ylab("CpG effect in models including only Birthweight") +
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("effectCompBothBirthW.png",width = 8,height = 6)
+
+```
+
+# birthOrder analysis correcting for birth related variables, by ancestry, no ancestry PCs, controlling for cell proportions, testing preg-weight variables
+
+```{r ewas of birthorder, correcting for vars}
+
+#variables to include in the regression:
+##proportional birthweight = birthweight/gestational age ?
+##selection factor, caco
+##maternal smoking: smoke_mo_preg
+##plate, or batch
+##sex
+##10 cell proportion PCs/ cell proportions
+
+setwd("~/ewas/birthorder")
+library(tidyverse)
+library(data.table)
+library(DescTools)
+
+# load birthorder data 
+
+#for(var in c("birth_order","preg_order")){
+  
+  var = "birth_order"
+
+  for(set in c(1,2)){
+  
+
+      setN = paste0("set",set)
+        
+      bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+       filter(set == setN)%>%
+       select(beadPosition, birth_order, preg_order)
+    
+     clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+       mutate(plate = as.factor(gsub("_.*$","",beadPosition))) %>%
+       inner_join(bo, by="beadPosition") 
+    
+    # load methylation data
+    
+    methy0 = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds"))
+    rownames(methy0) = c()
+
+    # Winsorize beta values
+    methy<-lapply(methy0[,-1], Winsorize, probs = c(0.005, 0.995), na.rm = FALSE) %>%
+      do.call(cbind,.) %>%
+      as.data.frame()
+    
+    methy$probeId = methy0$probeId
+
+    for(race in c("eur","lat")){
+        
+      if(race=="eur") clinical_sub = clinical0 %>% dplyr::filter(race==1)
+      if(race=="lat") clinical_sub = clinical0 %>% dplyr::filter(race==3)
+      
+      clinical1 = clinical_sub %>% 
+        mutate(sex = as.factor(sex)) %>%
+        select(beadPosition,subjectId,caco,sex,plate,birthWt,
+               gestage,smoke_mo_preg,mo_age,one_of(var))
+      
+      clinical2 = read.csv(paste0("~/sets/set",set,"/idol_deconvolution.csv")) %>%
+        select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC) %>%
+        inner_join(clinical1, by="beadPosition")
+    
+      setN=set
+      clinical3 = read.csv("~/ewas/birthorder/sourceF/set124_weightgain.csv") %>%
+        filter(set==paste0("set",setN)) %>%
+        select(beadPosition,mo_weightgain,mo_weight)%>%
+        inner_join(clinical2, by="beadPosition")
+
+      subs = intersect(colnames(methy)[-1],as.character(clinical3$beadPosition))
+      
+      methyDF = methy[,c("probeId",subs)] %>%
+        column_to_rownames(var="probeId")%>%
+        t()%>%
+        as.data.frame()
+    
+      clinical3 = clinical3 %>%
+        column_to_rownames(var="beadPosition") %>%
+        na.omit()
+      
+      cF = clinical3[subs, ]
+      
+      print(paste0("subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+      print(paste0("probe number in set ",set," of race ",race, " is ", ncol(methyDF)))  
+        
+      probes = colnames(methyDF)
+    
+      # model 1
+      reg <- lapply(probes,function(probe){
+        c(data.frame(CpG=probe),summary(
+          lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco + 
+               cF$plate + cF$gestage + cF$mo_age + cF$smoke_mo_preg + 
+               cF$birthWt + cF$CD8T + cF$CD4T + cF$NK + cF$Bcell + 
+               cF$Mono + cF$Gran + cF$nRBC))$coefficients[2,c(1,2,4)])})
+      reg_1 <- bind_rows(reg) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+      write.table(reg_1,paste0("sensitivitytest.nogain.noweight.",race,".set",set,".",var,".ewas.txt"),
+                  quote=FALSE,
+                  sep='\t',
+                  row.names = FALSE, 
+                  col.names = TRUE)  
+      
+        # model 2
+      reg1 <- lapply(probes,function(probe){
+        c(data.frame(CpG=probe),summary(
+          lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco + cF$mo_weight + 
+               cF$plate + cF$gestage + cF$mo_age + cF$smoke_mo_preg + 
+               cF$birthWt + cF$CD8T + cF$CD4T + cF$NK + cF$Bcell + 
+               cF$Mono + cF$Gran + cF$nRBC))$coefficients[2,c(1,2,4)])})
+      reg_2 <- bind_rows(reg1) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+      write.table(reg_2,paste0("sensitivitytest.nogain.weight.",race,".set",set,".",var,".ewas.txt"),
+                  quote=FALSE,
+                  sep='\t',
+                  row.names = FALSE, 
+                  col.names = TRUE)  
+      
+        # model 3
+      reg2 <- lapply(probes,function(probe){
+        c(data.frame(CpG=probe),summary(
+          lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco + cF$mo_weightgain + 
+               cF$plate + cF$gestage + cF$mo_age + cF$smoke_mo_preg + 
+               cF$birthWt + cF$CD8T + cF$CD4T + cF$NK + cF$Bcell + 
+               cF$Mono + cF$Gran + cF$nRBC))$coefficients[2,c(1,2,4)])})
+      reg_3 <- bind_rows(reg2) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+      write.table(reg_3,paste0("sensitivitytest.gain.noweight.",race,".set",set,".",var,".ewas.txt"),
+                  quote=FALSE,
+                  sep='\t',
+                  row.names = FALSE, 
+                  col.names = TRUE)  
+      
+        # model 4
+      reg3 <- lapply(probes,function(probe){
+        c(data.frame(CpG=probe),summary(
+          lm(methyDF[,probe] ~ cF[ ,var] + cF$sex + cF$caco + cF$mo_weight +
+               cF$mo_weightgain + 
+               cF$plate + cF$gestage + cF$mo_age + cF$smoke_mo_preg + 
+               cF$birthWt + cF$CD8T + cF$CD4T + cF$NK + cF$Bcell + 
+               cF$Mono + cF$Gran + cF$nRBC))$coefficients[2,c(1,2,4)])})
+      reg_4 <- bind_rows(reg3) %>% as.data.frame() %>% arrange(by=`Pr(>|t|)`)
+      write.table(reg_4,paste0("sensitivitytest.gain.weight.",race,".set",set,".",var,".ewas.txt"),
+                  quote=FALSE,
+                  sep='\t',
+                  row.names = FALSE, 
+                  col.names = TRUE)  
+
+    }  
+  }
+#}
+
+
+
+
+```
+
+[1] "subject number in set 1 of race eur is 199"
+[1] "probe number in set 1 of race eur is 483287"
+[1] "subject number in set 1 of race lat is 170"
+[1] "probe number in set 1 of race lat is 483287"
+[1] "subject number in set 2 of race eur is 148"
+[1] "probe number in set 2 of race eur is 484552"
+[1] "subject number in set 2 of race lat is 219"
+[1] "probe number in set 2 of race lat is 484552"
+
+```{r comparing results}
+
+library(tidyverse)
+library(data.table)
+library(cowplot)
+
+setwd("~/ewas/birthorder")
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+
+for(set in c(1,2)){
+  for(race in c("eur","lat")){
+    
+  #no weight no gain
+  nwng = fread(paste0("sensitivitytest.nogain.noweight.",race,".set",set,".birth_order.ewas.txt"))
+  nwng500 = nwng[1:500]
+  
+  #weight, no gain
+  wng = fread(paste0("sensitivitytest.nogain.weight.",race,".set",set,".birth_order.ewas.txt"))
+  wng500 = wng[1:500]
+
+  #no weight, gain
+  nwg = fread(paste0("sensitivitytest.gain.noweight.",race,".set",set,".birth_order.ewas.txt"))
+  nwg500 = nwg[1:500]
+  
+  #weight, and gain
+  wg = fread(paste0("sensitivitytest.gain.weight.",race,".set",set,".birth_order.ewas.txt"))
+  wg500 = wg[1:500]
+  
+  ## Annotate top 10 CpGs and genes in each dataset
+  anno <- IlluminaHumanMethylation450kanno.ilmn12.hg19 %>%
+    getAnnotation %>%
+    as.data.frame %>%
+    rownames_to_column(var="CpG") %>%
+    select(CpG,UCSC_RefGene_Name)
+  
+  nwng10 = nwng500[1:10] %>% select(CpG,`Pr(>|t|)`) %>% left_join(anno,by=c("CpG")) %>% mutate(model="nwng")
+  wng10 = wng500[1:10] %>% select(CpG,`Pr(>|t|)`) %>% left_join(anno,by=c("CpG")) %>% mutate(model="wng")
+  nwg10 = nwg500[1:10] %>% select(CpG,`Pr(>|t|)`) %>% left_join(anno,by=c("CpG")) %>% mutate(model="nwg")
+  wg10 = wg500[1:10] %>% select(CpG,`Pr(>|t|)`) %>% left_join(anno,by=c("CpG")) %>% mutate(model="wg")
+  
+  topComp = cbind(nwng10,wng10,nwg10,wg10) %>% as.data.frame()
+  
+  write.csv(topComp,paste0("comparison.of.top.hits.",race,".set",set,".csv"))
+  
+  ## Correlation between beta value and P values of top 500 hits
+  
+  com="beta values"
+  model0 = "no weight no gain"
+  modelX = "weight no gain"
+  
+  iris1= nwng500 %>%
+    inner_join(wng500,by="CpG") %>%
+    ggplot(aes(x=Estimate.x,y=Estimate.y))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+  com="p values"
+  model0 = "no weight no gain"
+  modelX = "weight no gain"
+  
+  iris2= nwng500 %>%
+    inner_join(wng500,by="CpG") %>%
+    ggplot(aes(x=`Pr(>|t|).x`,y=`Pr(>|t|).y`))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+  com="beta values"
+  model0 = "no weight no gain"
+  modelX = "gain but no weight  "
+  
+  iris3= nwng500 %>%
+    inner_join(nwg500,by="CpG") %>%
+    ggplot(aes(x=Estimate.x,y=Estimate.y))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+  com="p values"
+  model0 = "no weight no gain"
+  modelX = "gain but no weight  "
+  
+  iris4= nwng500 %>%
+    inner_join(nwg500,by="CpG") %>%
+    ggplot(aes(x=`Pr(>|t|).x`,y=`Pr(>|t|).y`))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+  com="beta values"
+  model0 = "no weight no gain"
+  modelX = "weight and gain"
+  
+  iris5= nwng500 %>%
+    inner_join(wg500,by="CpG") %>%
+    ggplot(aes(x=Estimate.x,y=Estimate.y))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+  com="p values"
+  model0 = "no weight no gain"
+  modelX = "weight and gain"
+  
+  iris6= nwng500 %>%
+    inner_join(wg500,by="CpG") %>%
+    ggplot(aes(x=`Pr(>|t|).x`,y=`Pr(>|t|).y`))+
+    geom_point()+
+    geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+    ggtitle(paste0("comparison between ",model0, " and ", modelX,"\n",com, " ",race," in set ",set))+
+    xlab(paste0("beta values ",model0)) + ylab(paste0("beta values ",modelX))+
+    theme_bw()+
+    theme(plot.title = element_text(hjust = 0.5))
+
+plot_grid(iris1, iris2, iris3, iris4, iris5, iris6, labels = "AUTO",nrow=3)
+ggsave(paste0("sensitivityAnalysis.",race,".set",set,".png"),width = 13,height = 15)
+  
+
+  }
+}  
+
+
+```
+
+# birthorder, testing robust linear regression codes with annotation
+
+```{r}
+#packages <- c("tidyverse", "data.table", "DescTools", "MASS", "lmtest", "sandwich")
+#install.packages(setdiff(packages, rownames(installed.packages())))  
+
+setwd("~/ewas/birthorder") # your working directory
+library(tidyverse)
+library(data.table)
+library(DescTools)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(tidyverse)
+library(parallel) 
+
+# Each race should have its own model and csv result file. Do not include any race with fewer than 15 subjects.
+# Each array should have its own model and csv result file. 
+# If you have miscarriage/abortion data, you should run two models for each situation (including and excluding miscarriage/abortion) 
+# Run the following for each model, replacing appropriate file names
+# Winsorize top and bottom beta values
+
+RLM.Robust <- function(meth, cov){
+
+    # meth = methyl["cg25813447",]
+    # cov = covs
+      
+    dat <- data.frame(y = meth, cov)
+    ff  <- formula(paste("y ~ ", paste0(colnames(cov), collapse="+")))
+    mod <- try(rlm(ff, data = dat, maxit = 200))
+    #cf = try(coeftest(mod, vcov=vcovHC(mod, type="HC0")))
+    cf = try(coeftest(mod))
+
+  	if (exists(class(cf)) == FALSE) {
+  		out = rep(NA,3)
+  	} else if (exists(class(cf)) == TRUE) {
+  		if( class(cf)[1] == "try-error") {
+  		cat("error throw by CpG", set, ";")
+  		out = rep(NA,3)
+  		print(paste0(cov, " - chol2inv could not be computed"))
+  		} 
+  		else {
+  			coef = cf[2,"Estimate"]
+  			se = cf[2,"Std. Error"]
+  			p.value = cf[2,"Pr(>|z|)"]
+  			out = c(coef, se, p.value) 
+  		}
+    }
+  names(out) = c("Beta","SE", "P"); return(out) 
+  }
+
+winsorize <- function(methylation,pct=winsorize.pct) {
+  quantiles <- matrixStats::rowQuantiles(methylation, probs=c(pct,1-pct), na.rm=T)
+  low <- quantiles[,1]
+  upper <- quantiles[,2]
+
+  outliers.lower <- rowSums(methylation < low, na.rm=T)
+  outliers.upper <- rowSums(methylation > upper, na.rm=T)
+  
+  idx <- which(methylation < low, arr.ind=T)
+  methylation[idx] <- low[idx[,1]]
+  
+  idx <- which(methylation > upper, arr.ind=T)
+  methylation[idx] <- upper[idx[,1]]
+
+  n <- rowSums(!is.na(methylation))
+  log <- data.frame(outliers.lower, outliers.upper, n)
+  return(list(methylation=methylation, log=log))
+}
+
+for(set in c(1,2)){
+  
+    setN = paste0("set",set)
+      
+    bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+     filter(set == setN)%>%
+     dplyr::select(beadPosition, birth_order, preg_order) %>%
+     dplyr::mutate(boCE=birth_order,
+                   boC=ifelse(birth_order==1,0,1),
+                   boCI=preg_order,
+                   boI=ifelse(preg_order==1,0,1))
+  
+   clinical0 = read.csv(paste0("~/sets/set",set,"/clinical_variables.csv")) %>%
+     inner_join(bo, by="beadPosition") 
+  
+  # load methylation data
+    #methy0 = read_rds(paste0("~/sets/set",set,"/beta_noob_imputed_set",set,".rds")) %>%
+    methy0 = fread(paste0("~/sets/set",set,"/set",set,"_Sesame_beta.csv")) %>%
+          as.data.frame()
+    methy0 = methy0[,-1]
+    
+    rownames(methy0) = c()
+
+  for(race in c("eur","lat")){
+    
+    #race="eur"
+      
+    if(race=="eur") clinical_sub = clinical0 %>% dplyr::filter(race==1)
+    if(race=="lat") clinical_sub = clinical0 %>% dplyr::filter(race==3)
+    
+    clinical1 = clinical_sub %>% 
+      dplyr::mutate(sex = as.factor(sex)) %>%
+      dplyr::select(beadPosition,subjectId,caco,sex,birthWt,
+             gestage,smoke_mo_preg,mo_age,boCE,boC,boCI,boI)%>%
+             mutate(plate = as.factor(as.character(gsub("_.*$","",beadPosition))))
+
+    
+    clinical2 = read.csv(paste0("~/sets/set",set,"/idol_deconvolution.csv")) %>%
+      dplyr::select(beadPosition,CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC) %>%
+      dplyr::inner_join(clinical1, by="beadPosition")
+  
+    setN=set
+    
+    clinical3 = read.csv("~/ewas/birthorder/sourceF/set124_weightgain.csv") %>%
+      dplyr::filter(set==paste0("set",setN)) %>%
+      dplyr::select(beadPosition,mo_weightgain,mo_weight)%>%
+      dplyr::inner_join(clinical2, by="beadPosition")
+
+    subs = intersect(colnames(methy0),as.character(clinical3$beadPosition))
+
+    clinical4 = clinical3 %>%
+      column_to_rownames(var="beadPosition") 
+    
+    cF = clinical4[subs, ] %>% dplyr::select(-subjectId)
+
+    methyDF = methy0[,c("probeId",subs)] %>%
+      column_to_rownames(var="probeId")%>%
+      as.matrix()
+
+    replace.outliers <- winsorize(methyDF, 0.005)
+    methy1 <- replace.outliers$methylation
+
+    print(paste0("subject number in set ",set," of race ",race, " is ", nrow(cF)))  
+    print(paste0("probe number in set ",set," of race ",race, " is ", nrow(methy1)))  
+    dim(cF)
+    dim(methy1)
+
+    ### To run model 1A
+    var= "boCE"
+
+    covs = cF[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran")] 
+    reg_1 <- t(apply(methy1, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P) 
+
+    write.table(reg_1,paste0("bo.1A.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+    
+    ### To run model 1B
+    var= "boC"
+
+    covs = cF[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran")] 
+    reg_1 <- t(apply(methy1, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P)
+
+    write.table(reg_1,paste0("bo.1B.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+
+    ### To run model 2A
+    var= "boCI"
+
+    covs = cF[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran")] 
+    reg_1 <- t(apply(methy1, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P)
+        
+    write.table(reg_1,paste0("bo.2A.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+    ### To run model 2B
+    var= "boI"
+
+    covs = cF[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran")] 
+    reg_1 <- t(apply(methy1, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P)
+    
+    write.table(reg_1,paste0("bo.2B.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+   ### To run model S3A
+    
+    cf1 = cF %>% na.omit()
+    cf2 = droplevels(cf1)
+    methy2 = methy1[,rownames(cf1)]
+
+    var= "boCE"
+    
+    covs = cf2[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran","mo_weight")] 
+    reg_1 <- t(apply(methy2, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P)
+
+    write.table(reg_1,paste0("bo.S3A.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+   ### To run model S3B
+    var= "boCE"
+    
+    covs = cf2[,c(var,"sex","caco","plate","gestage","mo_age","smoke_mo_preg","birthWt","nRBC","CD8T","CD4T","NK","Bcell","Mono","Gran","mo_weightgain")]
+    reg_1 <- t(apply(methy2, 1, RLM.Robust, covs))  %>% 
+      as.data.frame %>%
+      arrange(by=P)
+    
+    write.table(reg_1,paste0("bo.S3B.",race,".set",set,".",var,".ewas.txt"),
+                quote=FALSE,
+                sep='\t',
+                row.names = FALSE, 
+                col.names = TRUE)  
+
+  }  
+}
+
+
+
+```
+
+# Meta-analysis of multiple cohorts
+
+```{r drawing manhatton plot}
+
+setwd("/ccls/home/sli/ewas/birthorder/meta")
+library(tidyverse)
+library(data.table)
+library(CMplot)
+library(QCEWAS)
+library(qqman)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf)
+
+#Loadback and annotate
+files = c("meta.1A.all.all.TBL",
+          "meta.1B.all.all.TBL",
+          "meta.2A.all.all.TBL",
+          "meta.2B.all.all.TBL",
+          "meta.S3A.all.all.TBL",
+          "meta.S3B.all.all.TBL")
+
+for(i in files){
+  
+  #i = "meta.1A.all.all.TBL"
+  
+  ewas_DS_ALL <- fread(i)%>%
+    dplyr::rename("cpg"="MarkerName",
+                  "P" = "P-value") %>%
+    dplyr::filter(grepl('cg', cpg)) %>%
+    filter(!is.na(P))%>% 
+    left_join(annoEPIC,by="cpg") %>%
+    arrange(by=P) %>% 
+    dplyr::filter(chr!="chrX"&chr!="chrY") %>%  
+    dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>% 
+    dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+    mutate(adjp = p.adjust(`P`, method="fdr"),
+           adjp_bon = p.adjust(`P`, method="bonferroni"))  
+  
+  filename = paste0(gsub("meta.|.TBL","",i),".anno.txt")
+  write.table(ewas_DS_ALL,filename,sep='\t',quote=FALSE,row.names = FALSE)
+      
+  sig_thresghold = ewas_DS_ALL %>%
+    filter(adjp<0.05)%>%
+    arrange(desc(adjp))
+  nrow(sig_thresghold)
+  sig_threshold = sig_thresghold[1,"P"]
+  
+  outcomes_model_CM_plot <- ewas_DS_ALL%>%
+    dplyr::mutate(p_val_cmplot = -log10(`P`))%>%
+    dplyr::mutate(p_val_cmplot= ifelse(Effect<0,-p_val_cmplot, p_val_cmplot )) %>%
+    dplyr::mutate(cpg_name=cpg) %>%
+    dplyr::select(cpg_name,chr,pos, p_val_cmplot) %>%
+    na.omit()
+  outcomes_model_CM_plot$chr <- gsub("chr","",outcomes_model_CM_plot$chr)
+  
+  if(is.na(sig_threshold)){
+  CMplot(outcomes_model_CM_plot,
+         plot.type="m",
+         band=0, 
+         cex=c(0.5,0.5,0.5),
+         amplify=FALSE,
+         LOG10=FALSE,  
+         signal.col=NULL,
+         chr.den.col=NULL,
+         file="jpg",
+         memo=i,
+         main=i,
+         dpi=500,
+         file.output=TRUE,
+         verbose=TRUE)
+  }else{
+  CMplot(outcomes_model_CM_plot,
+         plot.type="m",
+         band=0, 
+         cex=c(0.5,0.5,0.5),
+         amplify=FALSE,
+         LOG10=FALSE,  
+         signal.col=NULL,
+         chr.den.col=NULL,
+         threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
+         threshold.lty=2, 
+         threshold.lwd=1, 
+         threshold.col="black", 
+         file="jpg",
+         memo=i,
+         main=i,
+         dpi=500,
+         file.output=TRUE,
+         verbose=TRUE)    
+  }
+  
+  outcomes_model_qq <- ewas_DS_ALL %>% 
+    dplyr::mutate(ID=cpg)
+  lambda <- P_lambda(outcomes_model_qq$P)
+  
+  tiff(paste0(i,".lambda.tiff"), width = 10, height = 7, units = 'in', res = 300)
+  qq(outcomes_model_qq$P, main=paste0("lambda value= ",round(lambda,3)))
+  dev.off()
+  
+}
+
+
+# specifically for model 1A
+i = "meta.1A.all.all.TBL"
+filename = paste0(gsub("meta.|.TBL","",i),".anno.txt")
+
+sig_thresghold = fread(filename) %>%
+  as.data.frame() %>%
+  filter(adjp<0.05)%>%
+  arrange(desc(adjp))
+nrow(sig_thresghold)
+sig_threshold = sig_thresghold[1,"P"]
+
+annotation = ewas_DS_ALL %>%
+  filter(UCSC_RefGene_Name!="") %>%
+  filter( (P<=2.03E-08) | cpg %in% c("cg01176516") ) %>%
+  #filter(P<=2.03E-08 | (chr=="chr7")&(pos==56515510 | pos==63506148 )) %>%
+  mutate(gene.highlight = sub(";.*$","",UCSC_RefGene_Name))
+cpg.highlight = annotation$cpg
+genes.highlight = annotation$gene.highlight
+
+outcomes_model_CM_plot <- ewas_DS_ALL%>%
+  dplyr::mutate(p_val_cmplot = -log10(P))%>%
+  dplyr::mutate(p_val_cmplot= ifelse(Effect<0,-p_val_cmplot, p_val_cmplot )) %>%
+  dplyr::select(cpg, chr,pos, p_val_cmplot)
+outcomes_model_CM_plot$chr <- gsub("chr","",outcomes_model_CM_plot$chr)
+
+CMplot(outcomes_model_CM_plot,
+       plot.type="m",
+       band=0, 
+       cex=c(0.5,0.5,0.5),
+       amplify=FALSE,
+       LOG10=FALSE,  
+       signal.col=NULL,
+       chr.den.col=NULL,
+       threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
+       threshold.lty=2, 
+       threshold.lwd=1, 
+       threshold.col="black", 
+       highlight=cpg.highlight,
+       highlight.text=genes.highlight, 
+       file="jpg",
+       memo=paste0("anno.",i),
+       dpi=500,
+       file.output=TRUE,
+       verbose=TRUE)    
+
+
+```
+
+#top CpGs and pathway analysis
+
+```{r top CpGs and pathway analysis}
+
+#all, all
+### top 10 CpGs identified by the analysis
+setwd("/ccls/home/sli/ewas/birthorder/meta")
+
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") 
+
+platform="all"
+race="all"
+
+for(modelN in c("1A","1B","2A","2B","S3A","S3B")){
+  
+  #modelN="1A"
+  
+  model <- fread(paste0(modelN,".",platform,".",race,".anno.txt")) %>%
+    as.data.frame() 
+  
+  sigCpGs <- model %>%
+    filter(adjp<0.05) %>%
+    write_tsv(paste0("sig.cpgs.",modelN,".",platform,".",race,".txt"))
+  
+  sigCpGsVis <- model %>%
+    filter(adjp<0.05) %>%
+    filter(UCSC_RefGene_Name!="") %>%
+    mutate(geneName = gsub(";.*","",UCSC_RefGene_Name))
+  data.frame(sigCpGsVis$geneName)
+  table(sigCpGsVis$geneName) %>% max()
+  
+  topsCpG <- head(model,10) 
+  a = topsCpG %>% 
+    dplyr::select(cpg,Direction,adjp,Relation_to_Island,UCSC_RefGene_Name)
+  
+  #print(modelN)
+  #print(a)
+  
+  meta = model %>%
+    arrange(adjp) %>%
+    dplyr::filter(adjp<0.05) 
+  dim(meta)
+  
+  ### pathway analysis for adj P < 0.05
+  meta = model %>%
+    arrange(adjp) %>%
+    dplyr::filter(adjp<0.05) %>%
+    dplyr::select(cpg,P,adjp) 
+  write_rds(meta,paste0(modelN,".meta.rds"))
+
+  meta = model %>%
+    arrange(adjp) %>%
+    dplyr::filter(adjp<0.05,HetPVal>0.05) %>%
+    dplyr::select(cpg,P,adjp) 
+  dim(meta)
+
+  write_rds(meta,paste0(modelN,".cons.meta.rds"))  
+}
+
+# local computer
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(tidyverse)
+setwd("/Users/bo/Downloads/before")
+#setwd("/ccls/home/sli/ewas/birthorder/meta")
+platform="all"
+race="all"
+  
+for(modelN in c("1A","1B","2A","2B","S3A","S3B")){
+    
+  #modelN="1A"
+
+  meta = read_rds(paste0(modelN,".meta.rds"))
+
+  cpg.pval = as.numeric(meta$P)
+  names(cpg.pval) = meta$cpg 
+  
+  res1 = methylglm(cpg.pval = cpg.pval, GS.type = "KEGG", array.type = "EPIC")
+  res2 = methylglm(cpg.pval = cpg.pval, GS.type = "GO", array.type = "EPIC")
+  
+  write.table(res1,paste0("../after/pathway.kegg.",modelN,".",platform,".",race,".txt"),
+              sep = "\t", row.names = FALSE, quote = FALSE)
+  write.table(res2,paste0("../after/pathway.go.",modelN,".",platform,".",race,".txt"),
+              sep = "\t", row.names = FALSE, quote = FALSE)
+
+}
+
+## consistent CpGs only
+for(modelN in c("1A","1B","2A","2B","S3A","S3B")){
+    
+  #modelN="1A"
+
+  meta = read_rds(paste0(modelN,".cons.meta.rds"))
+  
+  cpg.pval = as.numeric(meta$P)
+  names(cpg.pval) = meta$cpg 
+  
+  res1 = methylglm(cpg.pval = cpg.pval, GS.type = "KEGG", array.type = "EPIC")
+  res2 = methylglm(cpg.pval = cpg.pval, GS.type = "GO", array.type = "EPIC")
+  
+  write.table(res1,paste0("../after/consistent.pathway.kegg.",modelN,".",platform,".",race,".txt"),
+              sep = "\t", row.names = FALSE, quote = FALSE)
+  write.table(res2,paste0("../after/consistent.pathway.go.",modelN,".",platform,".",race,".txt"),
+              sep = "\t", row.names = FALSE, quote = FALSE)
+
+}
+```
+
+#DMR analysis from the analysis
+
+```{r DMRs}
+
+setwd("/ccls/home/sli/ewas/birthorder/meta")
+library(tidyverse)
+library(data.table)
+library(ENmix)
+library(GenomicRanges)
+library(AnnotationHub)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(annotatr)
+library(methyAnalysis)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+platform="all"
+race="all"
+
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  mutate(start=pos,
+         end=pos,
+         probe=Name) %>%
+  dplyr::select(chr,start,end,probe) 
+
+for(modelN in c("1A","1B","2A","2B","S3A","S3B")){
+
+ # modelN = "1A"  
+ raw = fread(paste0(modelN,".",platform,".",race,".anno.txt")) %>%
+    as.data.frame() %>%
+    dplyr::mutate(start=pos, end=pos) 
+  
+ raw1 = raw %>%
+    dplyr::rename("probe"="cpg",
+                  "p"="P") %>%
+    dplyr::select(probe,p,chr,start,end) %>%
+    mutate(chr=as.numeric(sub("chr","",chr)))%>%
+    arrange(chr,start)%>%
+    filter(p > 0 & p <1) %>%
+    na.omit() 
+  
+  ipdmr(raw1,
+        include.all.sig.sites=FALSE,
+        region_plot=FALSE,
+        mht_plot=FALSE)
+  
+  # if (file.exists("region_plot.pdf")) {
+  #  file.rename("region_plot.pdf", paste0(modelN,".",platform,".",race,"_region_plot.pdf"))
+  # } 
+  
+  if(file.exists("resu_ipdmr.csv")){
+  
+    dmr = read.csv("resu_ipdmr.csv") %>%
+      filter(nprobe>1)
+    
+    comb_p_GR <- makeGRangesFromDataFrame(dmr, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field="end",
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    
+    if (require(TxDb.Hsapiens.UCSC.hg19.knownGene)) {
+    try(comb_p_GR_DF <-annotateDMRInfo(comb_p_GR, 'TxDb.Hsapiens.UCSC.hg19.knownGene'),
+        silent=TRUE)
+    }
+    
+    comb_p_GR_DF <- data.frame(comb_p_GR_DF$sigDMRInfo) %>%
+      mutate(dmr_id = paste0(seqnames,"_",start,"_",end))%>%
+      dplyr::select(-strand)
+    
+    dmrs_1 = comb_p_GR_DF %>%  
+      dplyr::select(seqnames,start,end,dmr_id) %>%
+      as.data.frame()
+  
+    # betasAll = raw %>%
+    #   filter(!is.na(P))%>%
+    #   #mutate(CpG = V1) %>%
+    #   dplyr::select(cpg,Effect) %>%
+    #   left_join(annoEPIC,by=c("cpg"="probe")) %>%
+    #   arrange(chr,start)%>%
+    #   na.omit()
+          
+    betasAll = raw %>%
+      filter(!is.na(P))%>%
+      dplyr::select(cpg,Effect,chr,start,end) %>%
+      arrange(gsub("chr","",chr),start)%>%
+      na.omit()
+    
+    DMR_GR <- makeGRangesFromDataFrame(dmrs_1, keep.extra.columns=T,
+                           ignore.strand=T,
+                           seqinfo=NULL,
+                           seqnames.field=c("seqnames"),
+                           start.field="start",
+                           end.field=c("end"),
+                           strand.field="strand",
+                           starts.in.df.are.0based=FALSE)
+    Res_GR <- makeGRangesFromDataFrame(betasAll, keep.extra.columns=T,
+                             ignore.strand=T,
+                             seqinfo=NULL,
+                             seqnames.field=c("chr"),
+                             start.field="start",
+                             end.field=c("end"),
+                             strand.field="strand",
+                             starts.in.df.are.0based=FALSE)
+    overlap_DMR_Res <- GenomicRanges::findOverlaps(Res_GR,DMR_GR, ignore.strand=T)
+    
+    a=dmrs_1[subjectHits(overlap_DMR_Res),] %>%
+      dplyr::select(dmr_id)
+    b=betasAll[queryHits(overlap_DMR_Res),] 
+    com = cbind(b,a) %>% 
+      as.data.frame() %>%
+      arrange(chr,start) %>%
+      group_by(dmr_id) %>%
+      summarise(mean_beta = mean(Effect))
+    
+    dmr_w_beta = comb_p_GR_DF %>%
+      left_join(com,by="dmr_id") %>%
+      dplyr::select(-dmr_id)
+    
+    write.csv(dmr_w_beta,paste0(modelN,".",platform,".",race,".annotated_dmr.csv"))
+    
+    unlink("resu_ipdmr.csv") # delete this file
+  
+  }
+}
+
+```
+
+```{r Epigenetic score for birthweight (LASSO regression)}
+
+setwd("/ccls/home/sli/ewas/birthorder/meta/score")
+library(tidyverse)
+library(data.table)
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf)
+
+# Top CpGs for epigenetic part of birth order results
+
+i = "meta.1A.all.all.no.usc.TBL"
+
+ewas_DS_ALL <- fread(paste0("../",i))%>%
+  dplyr::rename("cpg"="MarkerName",
+                "P" = "P-value") %>%
+  dplyr::filter(grepl('cg', cpg)) %>%
+  filter(!is.na(P))%>% 
+  left_join(annoEPIC,by="cpg") %>%
+  arrange(by=P) %>% 
+  dplyr::filter(chr!="chrX"&chr!="chrY") %>%  
+  dplyr::filter(Probe_maf<0.05|is.na(Probe_maf)) %>% 
+  dplyr::filter(CpG_maf<0.05|is.na(CpG_maf)) %>%
+  mutate(adjp = p.adjust(`P`, method="fdr"),
+         adjp_bon = p.adjust(`P`, method="bonferroni")) %>%
+  dplyr::select(cpg,Effect)
+
+ewas_DS_ALL_100 = ewas_DS_ALL[1:100,] 
+
+write_rds(ewas_DS_ALL_100,"top.100.bo.score.rds")
+
+# read set 2 methylation data and compare case control diffrence
+ewas_DS_ALL_100 = read_rds("top.100.bo.score.rds") %>%
+  mutate(Effect_abs = abs(Effect))
+
+bo = read.csv("~/ewas/birthorder/sourceF/bthorder_meth_ph123_neo.csv") %>%
+ filter(set == "set2")%>%
+ dplyr::select(beadPosition, birth_order)
+
+s2_clinical = read.csv("/ccls/home/sli/sets/set2/clinical_variables.csv") %>%
+  filter(!is.na(caco))%>%
+  #filter(leuk_dx_type=="B"| CaCo==0) %>%
+  left_join(bo, by="beadPosition")
+
+s2 = read_rds("/ccls/home/sli/sets/set2/set2_Sesame_beta_imputed.rds") %>%
+  filter(probeId %in% ewas_DS_ALL_100$cpg) %>%
+  column_to_rownames(var="probeId") %>%
+  t %>%
+  as.matrix()
+  
+coef = ewas_DS_ALL_100 %>%
+  column_to_rownames(var="cpg")  
+
+coef_m = coef[colnames(s2),,drop=FALSE] %>% as.matrix()
+colnames(coef_m) = c("bo_score","bo_score_abs")
+
+score = s2 %*% coef_m[,1] %>% # 443X78 * 78X1 
+  as.data.frame() %>%
+  dplyr::rename("bo_score"="V1") %>%
+  rownames_to_column(var="beadPosition") %>%
+  inner_join(s2_clinical,by="beadPosition")
+
+score_abs = s2 %*% coef_m[,2] %>% # 443X78 * 78X1 
+  as.data.frame() %>%
+  dplyr::rename("bo_score_abs"="V1") %>%
+  rownames_to_column(var="beadPosition") %>%
+  inner_join(s2_clinical,by="beadPosition")
+
+# score = score_abs %>% dplyr::rename("bo_score"= "bo_score_abs")
+
+# correlation between ca/co and birth order score
+ggplot(score, aes(x=as.factor(CaCo), y=bo_score, fill=as.factor(CaCo))) +
+  geom_boxplot(outlier.size=0.2)+
+  theme_classic() +
+  xlab("self reported birth order") +
+  ylab("birth order score") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="disease status",labels=c("0","1"))
+
+t.test(score[score$CaCo==0,"bo_score"],
+       score[score$CaCo==1,"bo_score"])
+
+# correlation between birth order and birth order score
+score %>%
+  filter(!is.na(birth_order)) %>%
+  ggplot(aes(x=as.factor(birth_order), y=bo_score, fill=as.factor(CaCo))) +
+    geom_boxplot(outlier.size=0.2)+
+    theme_classic() +
+    xlab("case control status") +
+    ylab("birth order score") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_discrete(name="disease status",labels=c("0","1"))
+  
+## scatter plot by group
+score %>%
+  mutate(CaCo=as.factor(CaCo)) %>%
+  filter(!is.na(birth_order)) %>%
+  ggplot(aes(x=birth_order, 
+             y=bo_score,
+             color=CaCo)) +
+  geom_smooth(aes(group = CaCo),method='lm',se=FALSE) +
+  geom_jitter() +
+  theme_classic() +
+  xlab("birth order") +
+  ylab("birth order score") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="disease status",labels=c("0","1"))
+
+## box plot by birth order
+score %>%
+  filter(!is.na(birth_order)) %>%
+  ggplot(aes(x=as.factor(birth_order), y=bo_score)) +
+    geom_boxplot(outlier.size=0.2)+
+    theme_classic() +
+    xlab("self reported birth order") +
+    ylab("birth order score") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_discrete(name="disease status",labels=c("0","1"))
+
+
+```
+
+# sensitivity analysis
+
+```{r}
+
+setwd("/ccls/home/sli/ewas/birthorder/meta")
+
+library(tidyverse)
+library(data.table)
+
+# 2A: including miscarriage/abortion
+
+platform = "all"
+race="all"
+modelN="1A"
+model <- fread(paste0(modelN,".",platform,".",race,".anno.txt")) %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(P)) %>%
+  dplyr::rename("Effect_1A"="Effect",
+                "logP_1A"="logP") %>%
+  dplyr::select(cpg,Effect_1A,logP_1A)
+
+model2N="2A"
+model2 <- fread(paste0(model2N,".",platform,".",race,".anno.txt")) %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(P)) %>%
+  dplyr::rename("Effect_2A"="Effect",
+                "logP_2A"="logP")%>%
+  dplyr::select(cpg,Effect_2A,logP_2A)
+
+modelCompare = model %>%
+  inner_join(model2,by="cpg")
+
+ggplot(modelCompare,aes(x = Effect_1A, y = Effect_2A))+
+  geom_point(alpha = 0.4,color='salmon',shape= 4) +
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  xlab("Effect sizes,\n original model") + 
+  ylab("Effect sizes,\n including miscarriags/abortions")+
+  theme(axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.x = element_text(size=24),
+        axis.title.y = element_text(size=24))+
+  theme_bw()
+ggsave(paste0(model2N,".effect.size.sensitivity.png"),width = 6,height = 4)
+
+ggplot(modelCompare,aes(x = logP_1A, y = logP_2A))+
+  geom_point(alpha = 0.4,color='salmon',shape= 4) +
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  xlab("−log10 (P-value),\n original model") + 
+  ylab("−log10 (P-value),\n including miscarriags/abortions")+
+  theme(axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.x = element_text(size=24),
+        axis.title.y = element_text(size=24))+
+  theme_bw()
+ggsave(paste0(model2N,".logP,sensitivity.png"),width = 6,height = 4)
+
+
+# S3A: including + pre-pregnancy weight
+model2N="S3A"
+model2 <- fread(paste0(model2N,".",platform,".",race,".anno.txt")) %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(P)) %>%
+  dplyr::rename("Effect_2A"="Effect",
+                "logP_2A"="logP")%>%
+  dplyr::select(cpg,Effect_2A,logP_2A)
+
+modelCompare = model %>%
+  inner_join(model2,by="cpg")
+
+ggplot(modelCompare,aes(x = Effect_1A, y = Effect_2A))+
+  geom_point(alpha = 0.4,color='salmon',shape= 4) +
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  xlab("Effect sizes,\n original model") + 
+  ylab("Effect sizes,\n including maternal weight gain (g)")+
+  theme(axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.x = element_text(size=24),
+        axis.title.y = element_text(size=24))+
+  theme_bw()
+ggsave(paste0(model2N,".effect.size.sensitivity.png"),width = 6,height = 4)
+
+ggplot(modelCompare,aes(x = logP_1A, y = logP_2A))+
+  geom_point(alpha = 0.4,color='salmon',shape= 4) +
+  geom_abline(aes(intercept=0,slope=1),alpha=0.4,color="red")+
+  xlab("−log10 (P-value),\n original model") + 
+  ylab("−log10 (P-value),\n including maternal weight gain (g)")+
+  theme(axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.x = element_text(size=24),
+        axis.title.y = element_text(size=24))+
+  theme_bw()
+ggsave(paste0(model2N,".logP.sensitivity.png"),width = 6,height = 4)
+
+```
+
+```{r what does abortion change?}
+
+setwd("/ccls/home/sli/ewas/birthorder/meta")
+
+library(tidyverse)
+library(data.table)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+data("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
+  getAnnotation %>%
+  as.data.frame %>%
+  rownames_to_column(var="cpg") %>%
+  dplyr::select(cpg,chr,pos,Relation_to_Island,UCSC_RefGene_Name,
+                Probe_maf,UCSC_RefGene_Group,CpG_maf)
+
+platform = "all"
+race="all"
+modelN="1A"
+model <- fread(paste0(modelN,".",platform,".",race,".anno.txt")) %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(P)) %>%
+  dplyr::rename("Effect_1A"="Effect",
+                "logP_1A"="logP") %>%
+  dplyr::select(cpg,Effect_1A,logP_1A)
+
+model2N="2A"
+model2 <- fread(paste0(model2N,".",platform,".",race,".anno.txt")) %>%
+  as.data.frame() %>%
+  mutate(logP = -log10(P)) %>%
+  dplyr::rename("Effect_2A"="Effect",
+                "logP_2A"="logP")%>%
+  dplyr::select(cpg,Effect_2A,logP_2A)
+
+modelCompare = model %>%
+  inner_join(model2,by="cpg") %>%
+  mutate(diffDis = abs(Effect_1A-Effect_2A)) %>%
+  inner_join(annoEPIC,by="cpg") %>%
+  arrange(desc(diffDis))%>%
+  mutate(gene=gsub(";.*$","",UCSC_RefGene_Name)) %>%
+  filter(gene!="")
+
+modelCompareEnrich = modelCompare[1:100,] 
+write.csv(modelCompareEnrich,"model.1a.2a.comp.enrich.csv")
+
+# colon cancer? is this interesting?
+```
+
