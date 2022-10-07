@@ -6,6 +6,7 @@ editor_options:
 
 Project description: Finding somatic variants from childhood leukemia tumor samples, with matched normal tissues available.
 
+
 ```{bash GATK pipeline on wgs sequencing data}
 
 # raw files are saved at 
@@ -271,8 +272,8 @@ set -o pipefail
 cd /scratch1/lishaobo/smoking_temp
 #sbatch /scratch1/lishaobo/smoking_temp/codes/sortabam.sh
 
-input_bam=(`ls /scratch1/lishaobo/smoking_temp/aligned.bam/*.aligned.unsorted.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
-base=$(basename ${input_bam} .aligned.bam)
+input_bam=(`cat /scratch1/lishaobo/smoking_temp/all.aligned.unsorted.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${input_bam} .aligned.unsorted.bam)
 
 out_dir="/scratch1/lishaobo/smoking_temp/aligned.bam"
 sorted_bam_name="$base.aligned.sorted.bam"
@@ -511,49 +512,56 @@ SortAndFixTags
 #!/bin/bash
 #SBATCH --time=48:00:00
 #SBATCH --mail-type=ALL
-#SBATCH --array=???
+#SBATCH --array=1-73
 #SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/SortAndFixTags_%A_%a.out
 #SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/SortAndFixTags_%A_%a.errcd
 #SBATCH --job-name=SortAndFixTags
 #SBATCH -c 20
+#SBATCH --mem=246G
+#SBATCH --partition epyc-64
 #SBATCH --ntasks=1
-#SBATCH --partition=main
 
 set -e
 set -x
 set -u
 set -o pipefail
 
-# remember to generate fille list before sending out script!
-ls /scratch1/lishaobo/smoking_temp/mergebam/*.bam | wc -l
-ls /scratch1/lishaobo/smoking_temp/mergebam/*.bam  > /scratch1/lishaobo/smoking_temp/all.merged.files.txt
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/SortAndFixTags.sh
+
+# remember to generate file list before sending out script!
+#ls /scratch1/lishaobo/smoking_temp/MarkDuplicates/*.bam | wc -l
+#ls /scratch1/lishaobo/smoking_temp/MarkDuplicates/*.bam  > /scratch1/lishaobo/smoking_temp/all.merged.files.txt
 
 ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
-mergedbam=(`ls /scratch1/lishaobo/smoking_temp/all.merged.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
-output_bam_basename=$(basename ${mergedbam} .bam)
-output_dir="/scratch1/lishaobo/smoking_temp/mergebam"
-output_bam="${output_dir}/${output_bam_basename}.sorted.fixed.bam"
+mergedbam=(`cat /scratch1/lishaobo/smoking_temp/all.merged.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${mergedbam} .aligned.duplicates_marked.bam)
+out_dir="/scratch1/lishaobo/smoking_temp/MarkDuplicates"
+out_bam="${out_dir}/${output_bam_basename}.marked.sorted.bam"
 
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk SortSam  \
-  --java-options "-XmxXXXG"\
+  --java-options "-Xms230G"\
   --INPUT $mergedbam \
   --OUTPUT /dev/stdout \
   --SORT_ORDER "coordinate" \
   --CREATE_INDEX false \
   --CREATE_MD5_FILE false \
+  --TMP_DIR /scratch2/lishaobo/temp \
     | \
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk SetNmMdAndUqTags \
+  --java-options "-Xms230G"\
   --INPUT /dev/stdin \
-  --OUTPUT $output_bam\
+  --OUTPUT $out_bam\
   --CREATE_INDEX true \
   --CREATE_MD5_FILE true \
-  --REFERENCE_SEQUENCE $ref
+  --REFERENCE_SEQUENCE $ref\
+  --TMP_DIR /scratch2/lishaobo/temp
 
 rm -rf $mergedbam
 
@@ -561,15 +569,17 @@ rm -rf $mergedbam
 
 BaseRecalibrator
 
-```{bash}
+```{bash BaseRecalibrator}
+
 #!/bin/bash
 #SBATCH --time=48:00:00
 #SBATCH --mail-type=ALL
-#SBATCH --array=???
+#SBATCH --array=1-73
 #SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/BaseRecalibrator_%A_%a.out
 #SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/BaseRecalibrator_%A_%a.errcd
 #SBATCH --job-name=BaseRecalibrator
 #SBATCH -c 20
+#SBATCH --mem=110G
 #SBATCH --ntasks=1
 #SBATCH --partition=main
 
@@ -578,33 +588,33 @@ set -x
 set -u
 set -o pipefail
 
-
-cd /scratch1/lishaobo/smoking_temp/mergebam
+cd /scratch1/lishaobo/smoking_temp
+#sbatch /scratch1/lishaobo/smoking_temp/codes/BaseRecalibrator.sh
 
 # remember to generate fille list before sending out script!
-ls /scratch1/lishaobo/smoking_temp/mergebam/*.sorted.fixed.bam | wc -l
-ls /scratch1/lishaobo/smoking_temp/mergebam/*.sorted.fixed.bam  > /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt
+ls /scratch1/lishaobo/smoking_temp/MarkDuplicates/*.marked.sorted.bam | wc -l
+ls /scratch1/lishaobo/smoking_temp/MarkDuplicates/*.marked.sorted.bam  > /scratch1/lishaobo/smoking_temp/all.marked.sorted.files.txt
 
 ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
 known_sites_snp=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf
 known_sites_indel=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.known_indels.vcf.gz
 interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
 
-input_bam=(`ls /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
-output_bam_basename=$(basename ${input_bam} .sorted.fixed.bam)
+input_bam=(`cat /scratch1/lishaobo/smoking_temp/all.marked.sorted.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${input_bam} .marked.sorted.bam)
 output_dir="/scratch1/lishaobo/smoking_temp/recalibration_report"
-recalibration_report="$output_bam_basename.recal_data.csv"
-recalibration_report_output=$output_dir/$recalibration_report
 
-output_dir_bam="/scratch1/lishaobo/smoking_temp/mergebam"
+recalibration_report_output="${output_dir}/${output_bam_basename}.recal_data.csv"
+
+output_dir_bam="/scratch2/lishaobo/smoking_temp/MarkDuplicates_re"
 output_bam_name="$output_bam_basename.recalibrated.bam"
-output_bam=$output_dir_bam/$output_bam_name
+output_bam="${output_dir_bam}/${output_bam_name}"
 
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk BaseRecalibrator  \
-  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  --java-options "-Xmx100G -Djava.io.tmpdir=/scratch2/lishaobo" \
   -R $ref \
   -I $input_bam \
   --use-original-qualities \
@@ -614,10 +624,10 @@ singularity exec \
   -L $interval_list 
 
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk ApplyBQSR  \
-  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  --java-options "-Xmx100G -Djava.io.tmpdir=/scratch2/lishaobo" \
   -R $ref \
   -I $input_bam \
   -O $output_bam \
@@ -632,47 +642,52 @@ singularity exec \
     
 ```
 
-```{bash}
+```{bash AnalyzeCovariates}
 
 #!/bin/bash
 #SBATCH --time=48:00:00
 #SBATCH --mail-type=ALL
-#SBATCH --array=???
+#SBATCH --array=1-73
 #SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/AnalyzeCovariates_%A_%a.out
 #SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/AnalyzeCovariates_%A_%a.errcd
 #SBATCH --job-name=AnalyzeCovariates
 #SBATCH -c 20
 #SBATCH --ntasks=1
+#SBATCH --mem=80G
 #SBATCH --partition=main
 
-cd /scratch1/lishaobo/smoking_temp/mergebam
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+#sbatch --dependency=afterok:xxxxxx /scratch1/lishaobo/smoking_temp/codes/AnalyzeCovariates.sh
 
 ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
 known_sites_snp=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/Homo_sapiens_assembly38.dbsnp138.vcf
 known_sites_indel=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.known_indels.vcf.gz
 interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
 
-input_bam=(`ls /scratch1/lishaobo/smoking_temp/all.sorted.fixed.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
-output_bam_basename=$(basename ${input_bam} .sorted.fixed.bam)
+input_bam=(`ls /scratch1/lishaobo/smoking_temp/all.marked.sorted.files.txt | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+output_bam_basename=$(basename ${input_bam} .marked.sorted.bam)
+
 output_dir="/scratch1/lishaobo/smoking_temp/recalibration_report"
-recalibration_report_pre_name="$output_bam_basename.recal_data.csv"
-recalibration_report_pre=$output_dir/$recalibration_report_pre_name
+recalibration_report_pre="${output_dir}/${output_bam_basename}.recal_data.csv"
+recalibration_report_post="${output_dir}/${output_bam_basename}.recal_data.post.csv"
 
-recalibration_report_post_name="$output_bam_basename.recal_data.post.csv"
-recalibration_report_post=$output_dir/$recalibration_report_post_name
+output_dir_bam="/scratch2/lishaobo/smoking_temp/MarkDuplicates_re"
+output_bam_name="${output_bam_basename}.recalibrated.bam"
+output_bam="${output_dir_bam}/${output_bam_name}"
 
-output_dir_bam="/scratch1/lishaobo/smoking_temp/mergebam"
-output_bam_name="$output_bam_basename.recalibrated.bam"
-output_bam=$output_dir_bam/$output_bam_name
-
-outcsv="${output_dir}/${base}.AnalyzeCovariates.csv"
-outpdf="${output_dir}/${base}.AnalyzeCovariates.pdf"
+outcsv="${output_dir}/${output_bam_basename}.AnalyzeCovariates.csv"
+outpdf="${output_dir}/${output_bam_basename}.AnalyzeCovariates.pdf"
 
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk BaseRecalibrator  \
-  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  --java-options "-Xmx100G -Djava.io.tmpdir=/scratch2/lishaobo" \
   -R $ref \
   -I $output_bam \
   -O $recalibration_report_post \
@@ -681,14 +696,306 @@ singularity exec \
   -L $interval_list 
   
 singularity exec \
-  --bind /project,/scratch2 \
+  --bind /project,/scratch1,/scratch2 \
   /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
   gatk AnalyzeCovariates  \
-  --java-options "-XmsXXXG -Djava.io.tmpdir=/scratch2/lishabo" \ 
+  --java-options "-Xmx100G -Djava.io.tmpdir=/scratch2/lishaobo" \
   --before $recalibration_report_pre \
   --after $recalibration_report_post \
   --csv $outcsv\
   --plots $outpdf
+
+```
+
+Somatic variant calling
+
+```{bash scatter-gather}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/Mutect2_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/Mutect2_%A_%a.errcd
+#SBATCH --job-name=Mutect2
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=120G
+#SBATCH --partition main
+#SBATCH --array=1-38
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
+gnomad=/project/desmith_488/kerenxu/somatic_hg38/af-only-gnomad.hg38.vcf.gz
+pon=/project/desmith_488/kerenxu/somatic_hg38/1000g_pon.hg38.vcf.gz
+
+input_dir_bam="/scratch2/lishaobo/smoking_temp/MarkDuplicates_re"
+
+normal_bam=(`ls /scratch2/lishaobo/smoking_temp/MarkDuplicates_re/G*.recalibrated.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+normal_bam_file=$input_dir_bam/$normal_bam
+
+base=$(basename ${normal_bam} .recalibrated.bam)
+prefix="GM_"
+sample_name=${base#"$prefix"}
+tumor_bam="TM_$sample_name.recalibrated.bam"
+tumor_bam_file=$input_dir_bam/$tumor_bam
+
+output_dir_bam="/scratch2/lishaobo/smoking_temp/somaticCalling"
+output_vcf="${output_dir_bam}/sample${sample_name}.vcf.gz"
+output_bam="${output_dir_bam}/sample${sample_name}.tumor_normal.bam"
+output_tar_gz="${output_dir_bam}/sample${sample_name}.f1r2.tar.gz"
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  Mutect2 \
+  -R $ref \
+  -I $tumor_bam_file \
+  -I $normal_bam_file \
+  -normal $base \
+  --germline-resource $gnomad \
+  -pon $pon \
+  -L $interval_list \
+  -O $output_vcf\
+  --bam-output $output_bam \
+  --f1r2-tar-gz $output_tar_gz \
+  --tmp-dir /scratch2/lishaobo/temp
+
+```
+
+```{bash contamination}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=END
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/contamination_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/contamination_%A_%a.errcd
+#SBATCH --job-name=contamination
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=120G
+#SBATCH --partition main
+#SBATCH --array=1-38
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+
+cd /scratch1/lishaobo/smoking_temp
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+interval_list=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
+gnomad=/project/desmith_488/kerenxu/somatic_hg38/af-only-gnomad.hg38.vcf.gz
+pon=/project/desmith_488/kerenxu/somatic_hg38/1000g_pon.hg38.vcf.gz
+variants_for_contamination=/project/desmith_488/kerenxu/somatic_hg38/small_exac_common_3.hg38.vcf.gz
+
+normal_bam=(`ls /scratch2/lishaobo/smoking_temp/MarkDuplicates_re/G*.recalibrated.bam | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+normal_bam_file=$normal_bam
+
+base=$(basename ${normal_bam} .recalibrated.bam)
+prefix="GM_"
+sample_name=${base#"$prefix"}
+tumor_bam="TM_$sample_name.recalibrated.bam"
+tumor_bam_file=$input_dir_bam/$tumor_bam
+
+output_dir_bam="/scratch2/lishaobo/smoking_temp/somaticCalling"
+output_vcf="${output_dir_bam}/sample${sample_name}.vcf.gz"
+output_bam="${output_dir_bam}/sample${sample_name}.tumor_normal.bam"
+output_tar_gz="${output_dir_bam}/sample${sample_name}.f1r2.tar.gz"
+
+normal_pileups="${output_dir_bam}/${base}.pileups.table"
+tumor_pileups="${output_dir_bam}/T${sample_name}.pileups.table"
+contamination_table="${output_dir_bam}/sample${sample_name}.contamination.table"
+segments_table="${output_dir_bam}/sample${sample_name}.segments.table"
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  GetPileupSummaries \
+  -R $ref \
+  -I $normal_bam_file \
+  -V $variants_for_contamination \
+  -L $variants_for_contamination \
+  -O $normal_pileups \
+  --tmp-dir /scratch2/lishaobo/temp
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  GetPileupSummaries \
+  -R $ref \
+  -I $tumor_bam_file \
+  -V $variants_for_contamination \
+  -L $variants_for_contamination \
+  -O $tumor_pileups \
+  --tmp-dir /scratch2/lishaobo/temp
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  CalculateContamination \
+  -I $tumor_pileups \
+  -O $contamination_table \
+  --tumor-segmentation $segments_table \
+  -matched $normal_pileups \
+  --tmp-dir /scratch2/lishaobo/temp
+    
+```
+
+```{bash OrientationBias}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=END
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/OrientationBias_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/OrientationBias_%A_%a.errcd
+#SBATCH --job-name=OrientationBias
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=120G
+#SBATCH --partition main
+#SBATCH --array=1-38
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+
+input_dir_bam="/scratch2/lishaobo/smoking_temp/somaticCalling"
+
+input_f1r2_tar_gz=(`ls $input_dir_bam/*.f1r2.tar.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${input_f1r2_tar_gz} .f1r2.tar.gz)
+output_f1r2_tar_gz="$input_dir_bam/$base.artifact-priors.tar.gz"
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  LearnReadOrientationModel \
+  -I $input_f1r2_tar_gz \
+  -O $output_f1r2_tar_gz \
+  --tmp-dir /scratch2/lishaobo/temp
+
+```
+
+```{bash FilterMutectCalls}
+
+#!/bin/bash
+#SBATCH --time=48:00:00
+#SBATCH --mail-type=END
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/FilterMutectCalls_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/FilterMutectCalls_%A_%a.errcd
+#SBATCH --job-name=FilterMutectCalls
+#SBATCH -c 20
+#SBATCH --ntasks=1
+#SBATCH --mem=120G
+#SBATCH --partition main
+#SBATCH --array=1-38
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch1/lishaobo/smoking_temp
+
+ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    
+
+
+in_dir_bam="/scratch2/lishaobo/smoking_temp/somaticCalling"
+
+unfiltered_vcf=(`ls $in_dir_bam/*.vcf.gz | sed -n ${SLURM_ARRAY_TASK_ID}p`)
+base=$(basename ${unfiltered_vcf} .vcf.gz)
+prefix="sample"
+sample_name=${base#"$prefix"}
+
+contamination_table="${in_dir_bam}/${base}.contamination.table"
+maf_segments="${in_dir_bam}/${base}.segments.table"
+artifact_priors_tar_gz="${in_dir_bam}/${base}.artifact-priors.tar.gz"
+mutect_stats="${in_dir_bam}/${base}.vcf.gz.stats"
+
+out_dir_bam="/scratch2/lishaobo/smoking_temp/somaticCalling"
+output_vcf="${out_dir_bam}/${base}.filtering.vcf.gz"
+filtering_stats="${out_dir_bam}/$base.filtering.vcf.gz.stats"
+
+singularity exec \
+  --bind /project,/scratch1,/scratch2 \
+  /project/wiemels_260/sebastian/dependencies/gatk/gatk_latest.sif \
+  --java-options "-Xmx110G" \
+  FilterMutectCalls \
+  -V $unfiltered_vcf \
+  -R $ref \
+  -O $output_vcf \
+  --contamination-table $contamination_table \
+  --tumor-segmentation $maf_segments \
+  --ob-priors $artifact_priors_tar_gz \
+  -stats $mutect_stats \
+  --filtering-stats $filtering_stats \
+  --tmp-dir /scratch2/lishaobo/temp
+            
+```
+
+```{bash bcffilter}
+
+#!/bin/bash
+#SBATCH --time=01:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --output=/scratch1/lishaobo/smoking_temp/codes/output/bcffilter_%A_%a.out
+#SBATCH --error=/scratch1/lishaobo/smoking_temp/codes/error/bcffilter_%A_%a.errcd
+#SBATCH --job-name=bcffilter
+#SBATCH -c 15
+#SBATCH --ntasks=1
+#SBATCH --mem=59G
+#SBATCH --partition=main
+
+set -e
+set -x
+set -u
+set -o pipefail
+
+cd /scratch2/lishaobo/smoking_temp/somaticCalling
+
+for i in {1..38}; do
+
+  input_vcf=(`ls *.filtering.vcf.gz | sed -n ${i}p`)
+  base=$(basename ${input_vcf} .filtering.vcf.gz)
+  prefix="sample"
+  sample_name=${base#"$prefix"}
+  normal_sample_name="GM_$sample_name"
+  output_vcf=${base}.bcftools.filtered.tumoronly.vcf.gz
+  
+  bcftools view $input_vcf \
+    -Ou -i 'FILTER=="PASS"' | bcftools view -Ou -i 'FMT/DP[0]>=10' |\
+    bcftools view -Ou -i 'FMT/DP[1]>=14' | bcftools view -Ou -i '(FORMAT/AD[*:1]/FORMAT/DP)>=0.1' |\
+      bcftools view -s ^$normal_sample_name -o ../BCFtools.filter.tumoronly/$output_vcf -O z --threads 15
+done 
+
+cd /scratch2/lishaobo/smoking_temp/BCFtools.filter.tumoronly
+
+for i in {1..38}; do
+
+  input_vcf=(`ls *.vcf.gz | sed -n ${i}p`)
+  tabix ${input_vcf}
+  output_vcf=$(basename ${input_vcf} .bcftools.filtered.tumoronly.vcf.gz).bcftools.filtered.tumoronly.chr1to22.vcf.gz
+  
+  bcftools view $input_vcf -Ou \
+  --regions chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22 \
+  -o ../BCFtools.filter.tumoronly.autosomal/$output_vcf -O z --threads 15
+done
 
 ```
 
