@@ -240,14 +240,6 @@ for(i in files){
   dev.off()
 }
 
-# [1] "lambda value of ccls.set1.eur.LMR.PHENO1.glm.linear is: 1.02173424958845"
-# [1] "lambda value of ccls.set2.eur.LMR.PHENO1.glm.linear is: 0.998498513779258"
-# [1] "lambda value of ccls.set3.eur.LMR.PHENO1.glm.linear is: 0.962219814932119"
-# [1] "lambda value of ccls.set4.eur.LMR.PHENO1.glm.linear is: 1.00340539669486"
-# [1] "lambda value of ccls.set1.lat.LMR.PHENO1.glm.linear is: 1.00326041397532"
-# [1] "lambda value of ccls.set2.lat.LMR.PHENO1.glm.linear is: 1.00273205772241"
-# [1] "lambda value of ccls.set3.lat.LMR.PHENO1.glm.linear is: 0.998125728132205"
-# [1] "lambda value of ccls.set4.lat.LMR.PHENO1.glm.linear is: 0.998284149665314"
 ```
 
 ```{r loop up key SNPs}
@@ -271,9 +263,6 @@ lookup = fread("/ccls/home/sli/GWAS/bcell/rawfiles/lookup.meta.snps", header=FAL
 lookup = lookup %>%
   arrange(P)
 
-#write.csv(lookup, paste0(var,".meta.lookup.csv"))
-#lookup = read.csv(paste0(var,".meta.lookup.csv"),row.names = 1)
-
 dic = fread("/ccls/home/sli/GWAS/bcell/rawfiles/meta.lookup.cellP.txt") 
 colnames(dic) = c("trait","matID","chr","pos","gene")
 dic1 = dic %>% 
@@ -289,7 +278,6 @@ write.csv(metalu, paste0(var,".meta.lookup.gene.csv"))
 
 metalu = read.csv(paste0(var,".meta.lookup.gene.csv"))
 mean(metalu$P<0.05)
-0.05077789
 
 ```
 

@@ -14,7 +14,8 @@ Project description: Investigating the associations with neonatal DNA methylatio
 (3) Using neural network models (including simple neural network, convolutional neural network, recurrent neural network) to predict disease risk with multiple CpGs
 
 
-```{bash}
+
+```{bash sample preparations and preprocessing}
 
 cd /project/wiemels_494/sebastian/eyeDisease/raw
 
@@ -50,9 +51,6 @@ mv */*.idat idats
 
 head -1 batch1_1_SampleAnnotation.txt > SampleAnnotation.txt
 tail -n +2 -q batch?_1_SampleAnnotation.txt >> SampleAnnotation.txt
-
-
-
 
 ```
 
@@ -118,29 +116,6 @@ GMset <- mapToGenome(MSet)
 predictedSex <- getSex(GMset, cutoff = -2)
 write.csv(predictedSex,"predictedSex.eye.csv")
 
-# some samples cannot be matched (resolved)
-# targets = read.csv("targets.csv")
-# # 1464
-# raw1 = fread("/project/wiemels_494/sebastian/eyeDisease/raw/all_batches/SampleAnnotation.txt",
-#               skip=1,header=FALSE,fill=TRUE)
-# # 1465
-# 
-# raw1$V1[which(!raw1$V1 %in% targets$targets)]
-# #  [1] "205617020157_R01C01" "205617020157_R02C01" "205617020157_R03C01"
-# #  [4] "205617020157_R04C01" "205617020157_R05C01" "205617020157_R06C01"
-# #  [7] "205617020157_R07C01" "205617020157_R08C01" "204617080032_R01C01"
-# # [10] "204617080032_R02C01" "204617080032_R03C01" "204617080032_R04C01"
-# # [13] "204617080032_R05C01" "204617080032_R06C01" "204617080032_R07C01"
-# # [16] "204617080032_R08C01" ""   
-# 
-# targets$targets[which(!targets$targets %in% raw1$V1)]
-# #  [1] "205617080032_R01C01" "205617080032_R02C01" "205617080032_R03C01"
-# #  [4] "205617080032_R04C01" "205617080032_R05C01" "205617080032_R06C01"
-# #  [7] "205617080032_R07C01" "205617080032_R08C01" "205617080157_R01C01"
-# # [10] "205617080157_R02C01" "205617080157_R03C01" "205617080157_R04C01"
-# # [13] "205617080157_R05C01" "205617080157_R06C01" "205617080157_R07C01"
-# # [16] "205617080157_R08C01"
-
 # generation of the phenotype file
 library(tidyverse)
 library(data.table)
@@ -200,45 +175,14 @@ combined_post_qc = combined %>%
   filter(!beadPosition %in% allDrops) %>%
   mutate(diseases = hyperopia_b_ind+astigm2g_b_ind+exotropia_ind+exotropia_ind+bi_decreased_vision_ind)%>%
   dplyr::select(-bi_decreased_vision_ind,-hyperopia_b_ind,-astigm2g_b_ind,-exotropia_ind,-esotropia_ind)
-# [1] 1459   37
 
 write.csv(combined_post_qc,"/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv")
 
-#combined_post_qc = fread("/project/wiemels_494/sebastian/eyeDisease/codes/eye.proj.clinical.var.csv")
 ```
-
-######################################################################## 
-
-# on UCB HPC and do the sesame normalization
-
-cd /ccls/home/sli/dependencies/r_self/ \*install R new version on
-Berkeley HPC wget
-<https://cran.r-project.org/src/base/R-4/R-4.1.2.tar.gz>
-
-./configure\
---prefix=/ccls/home/sli/dependencies/r_self/R-4.1.2\
---enable-memory-profiling\
---enable-R-shlib\
---with-blas\
---with-lapack\
---with-readline=no\
---with-x=no make make install
-
-cd \~/sets/eyes /ccls/home/sli/dependencies/r_self/R-4.1.2/bin/./R
-
--   library location: /ccls/home/sli/dependencies/r_self/R-4.1.2/library
-
-export TMPDIR=/ccls/home/sli/tempos export
-EXPERIMENT_HUB_CACHE=/ccls/home/sli/.cache/R/ExperimentHub export
-PATH="/ccls/home/sli/dependencies/r_self/R-4.1.2/bin:\$PATH"
-
-/ccls/home/sli/dependencies/r_self/R-4.1.2/bin/./R setwd("\~/sets/eyes")
-
-######################################################################## 
 
 # on USC HPC and do the sesame normalization
 
-```{r normalization of methylation sesame}
+```{r normalization of methylation using sesame}
 
 # module load gcc/11.2.0
 # module load openblas/0.3.18
@@ -355,7 +299,7 @@ betasRaw = betasRaw[rownames(beatsFilter1),"205624890179_R07C01"]
 
 ```
 
-# DECONVOLUTION
+# DECONVOLUTION of cell proportions
 
 ```{r DECONVOLUTION OF CELL TYPES}
 
@@ -402,7 +346,7 @@ ggsave("Cell_proportions_in_eye_project.png",width = 8,height = 6)
 
 ```
 
-```{r shiny}
+```{r shiny to visualize}
 
 # shiny interactive figures
 setwd("/project/wiemels_494/sebastian/eyeDisease")
@@ -420,7 +364,7 @@ runShinyMethyl(summary)
 
 ```
 
-# epistructure and refractor
+# epistructure and refractor pcs as EWAS covariates
 
 ```{r prepare for glint files}
 
@@ -608,10 +552,7 @@ write_rds(clinical,"/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotyp
 
 ```
 
-> > comparing the cell proportion differences between controls and
-> > different phenotypes
-
-```{r}
+```{r  comparing the cell proportion differences between controls and different phenotypes}
 
 library(broom)
 library(tidyverse)
@@ -622,9 +563,6 @@ subCP <- read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotype
   as.data.frame() %>%
   mutate(EPIC_Plate = as.factor(EPIC_Plate))
 # 1452
-
-#which(subCP$beadPosition=='205624890179_R07C01')
-#which(subCP$beadPosition=='205657390060_R07C01')
 
 for(pheno in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_vision")){
 
@@ -660,7 +598,7 @@ for(pheno in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_
 
 > > valiadating 2 gestational age variables
 
-```{r}
+```{r valiadating 2 gestational age variables}
 
 library(broom)
 library(tidyverse)
@@ -676,10 +614,8 @@ plot(subCP$gest_age_day,subCP$Gestation_length_CDPH)
 
 ```
 
-> > cell proportion differences between controls and different
-> > phenotypes, controlling for gestational age
 
-```{r}
+```{r cell proportion differences between controls and different phenotypes, controlling for gestational age}
 
 library(broom)
 library(tidyverse)
@@ -736,7 +672,7 @@ for(pheno in c("hyperopia_b","astigm2g_b","esotropia","exotropia","bi_decreased_
 
 ```
 
-Smoking score analysis
+>> Smoking score analysis
 
 ```{r computing smoking score for all individuals}
 
@@ -1064,18 +1000,12 @@ datClock_all_probe <- data.frame(probeId = datClock %>% pull(CpGmarker) %>% .[-1
 nrow(datClock_all_probe) # 353
 
 length(intersect(rownames(methyl),datClock$CpGmarker)) # 322 out of 353 probes that are needed
-
-# add those missing CpGs and gave them values NA 
-#setdiff(datClock_all_probe$probeId,rownames(methyl))
 dat1 <- datClock_all_probe %>% left_join(methyl %>% 
                                            as.data.frame() %>% 
                                            rownames_to_column(var="probeId"), 
                                          by = "probeId")
 
 #STEP 1: DEFINE QUALITY METRICS
-#meanMethBySample =as.numeric(apply(as.matrix(dat1[,-1]),2,mean,na.rm=F))
-#minMethBySample   =as.numeric(apply(as.matrix(dat1[,-1]),2,min,na.rm=F))
-#maxMethBySample  =as.numeric(apply(as.matrix(dat1[,-1]),2,max,na.rm=F))
 datMethUsed = t(dat1[,-1])  
 colnames(datMethUsed) = dat1 %>% pull(probeId)
 noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
@@ -1122,10 +1052,6 @@ dat1_remake <- dat1_remake %>% data.table()
 dat1_remake$probeId <- dat1_remake_probeId
 dat1 <- dat1_remake %>% relocate(probeId)
 
-# STEP 3: Data normalization (each sample requires about 8 seconds). It would be straightforward to parallelize this operation. ---- SKIP 
-
-#STEP 4: Predict age and create a data frame for the output (referred to as datout)
-# check order
 selectCpGsClock = is.element(dat1$probeId, datClock[-1,1] %>% pull(CpGmarker))  
 datMethClock0 = data.frame(t(dat1[selectCpGsClock, -1]))  
 colnames(datMethClock0) = dat1[selectCpGsClock ,]$probeId
@@ -1165,13 +1091,8 @@ dat0 <- data.frame(probeId =datClock$cpgs[-1]) %>% left_join(methyl %>%
 selectCpGsClock=is.element(dat0[,1], as.character(datClock[-1,2]%>% pull()))  
 datMethClock0=data.frame(t(dat0[selectCpGsClock, -1]))  
 colnames(datMethClock0)=as.character(dat0[selectCpGsClock ,1])
-
-# Reality check: the following output should only contain numeric values.
-# Further, the column names should be CpG identifiers (cg numbers).
 datMethClock0[1:5,1:5]
 datMethClock= data.frame(datMethClock0[as.character(datClock[-1,2]%>% pull())])
-
-#Output DNAm age estimator
 Haftorn_clock=as.numeric(datClock$coef[1] + as.matrix(datMethClock)%*%as.numeric(datClock$coef[-1]))
 x <- datClock$coef[1] + as.matrix(datMethClock)%*%as.numeric(datClock$coef[-1])
 df_Haftorn_clock <- data.frame(beadPosition = rownames(x), Haftorn_clock)
@@ -1224,7 +1145,6 @@ if ( fastImputation | nSamples==1 ){
 
 datMethUsed %>% dim()
 
-# convert datMethUsed to dat1
 dat1_remake <- t(datMethUsed)
 colnames(dat1_remake) = rownames(datMethUsed)
 dat1_remake_probeId <- rownames(dat1_remake)
@@ -1232,19 +1152,13 @@ dat1_remake <- dat1_remake %>% data.table()
 dat1_remake$probeId <- dat1_remake_probeId
 dat1 <- dat1_remake %>% relocate(probeId)
 
-# STEP 3: Data normalization (each sample requires about 8 seconds). It would be straightforward to parallelize this operation. ---- SKIP 
-#STEP 4: Predict age and create a data frame for the output (referred to as datout)
-# sort dat1 to have the same order with datClock
 dat1 <- data.frame(probeId = datClock[-1,1] %>% pull(CpGmarker)) %>% left_join(dat1, by = "probeId")
-# check order
 selectCpGsClock = is.element(dat1[,1], datClock[-1,1] %>% pull(CpGmarker))  
 datMethClock0 = data.frame(t(dat1[selectCpGsClock, -1]))  
 colnames(datMethClock0) = as.character(dat1[selectCpGsClock ,1])
-# Reality check: the following output should only contain numeric values.
-# Further, the column names should be CpG identifiers (cg numbers).
+
 datMethClock0[1:5,1:5]
 datMethClock = data.frame(datMethClock0[datClock[-1,1] %>% pull(CpGmarker)])
-#Output DNAm age estimator for the DNAmAge
 Knight_clock_week = as.numeric(datClock$CoefficientTraining[1] + as.matrix(datMethClock)%*%as.numeric(datClock$CoefficientTraining[-1]))
 Knight_clock <- 7*Knight_clock_week
 x <- as.matrix(datMethClock)%*%as.numeric(datClock$CoefficientTraining[-1])
@@ -1261,13 +1175,11 @@ dat1 <- datClock_all_probe %>% left_join(methyl %>%
                                          by = "probeId")
 dim(dat1)
 
-#STEP 1: DEFINE QUALITY METRICS
 datMethUsed = t(dat1[,-1])  
 colnames(datMethUsed) = dat1 %>% pull(probeId)
 noMissingPerSample=apply(as.matrix(is.na(datMethUsed)),1,sum)
 table(noMissingPerSample) # 14 missing probes
 
-#STEP 2: Imputing 
 library(impute)
 fastImputation=FALSE
 nSamples = 1458
@@ -1280,7 +1192,6 @@ if (! fastImputation & nSamples>1 & max(noMissingPerSample,na.rm=TRUE)<3000 ){
   } # end of if
 } # end of if (! fastImputation)
 
-#STEP 3: Predict age and create a data frame for the output (referred to as datout)
 mypred <- predictGA(datMethUsed, transp=F)
 df_Bohlin_clock <- data.frame(beadPosition = rownames(mypred), Bohlin_clock = mypred %>% pull(GA))
 
@@ -1294,9 +1205,6 @@ final_all_clocks = tlwClinical %>% # DNAmTL
 
 write.csv(final_all_clocks,"telomere_dnam_set.eye.csv")
   
-# compare different prototypes
-# hyperopia_b,astigm2g_b,esotropia,exotropia,bi_decreased_vision, hyperopia_b2, hyperopia_bg3, astigm2g_b, astigm2g_b2,astigm_bg3
-
 for(var in c("hyperopia_b","esotropia","exotropia","bi_decreased_vision","hyperopia_b2","astigm2g_b","astigm2g_b2")){
   for(clock in c("DNAmTL","DNAmAge","Haftorn_clock","Knight_clock","Bohlin_clock")){
 
@@ -1373,25 +1281,6 @@ logistic.fun <- function(meth, var, cov){
   return(out) 
   }
 
-# #linear <- function(meth,cov){
-#   methDF = meth %>% as.numeric()
-#   dat <- data.frame(y = methDF, cov)
-#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
-#   mod <- try(lm(ff, data = dat),silent = TRUE)
-#   N <- sum(!is.na(dat[,1]))
-#   if (class(mod)=="lm") {
-#     coefs = summary(mod)$coefficients
-#     coef = coefs[2,"Estimate"]
-#     SE = coefs[2,"Std. Error"]
-#     t.value = coefs[2,"t value"]
-#     p.value = coefs[2,"Pr(>|t|)"]
-#     out = c(coef, SE, t.value, p.value, N) 
-#   } else {
-#     out = c(rep(NA,4), N)
-#   }
-#   names(out) = c("Beta","SE", "t", "P", "N")
-#   return(out) 
-# }
 
 varName="hyperopia_b"
 covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
@@ -1433,7 +1322,6 @@ stopCluster(cl)
 # module load openblas/0.3.18
 # module load r/4.1.2
 
-
 setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
 library(tidyverse)
 library(data.table)
@@ -1464,8 +1352,6 @@ tmp <- results[!is.na(results$P),]
 lambda = median(qchisq(1- tmp$P,1))/qchisq(0.5,1)
 print(round(lambda, 2))
 
-#[1] 0.88
-
 results <- results %>%
   mutate(fdr=p.adjust(P, method = "fdr", n=length(P))) %>%
   mutate(bf=p.adjust(P, method = "bonferroni", n=length(P))) 
@@ -1476,12 +1362,6 @@ write.table(results,paste0(varName,".ewas.annotated.lm.txt"),
             sep = '\t')
 
 results[1,]
-#           cpg     Beta        SE        Z            P ncase ncontrol  chr
-# 1: cg15808331 4.245565 0.9250213 4.589695 4.438947e-06   496      761 chr3
-#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
-# 1: 45142585            OpenSea             CDCP1        NA               Body
-#    CpG_maf Regulatory_Feature_Group       fdr bf
-# 1:      NA                          0.9999855  1
 
 ####################################
 # figures (qq plot and manhattan)
@@ -1517,10 +1397,6 @@ CMplot(outcomes_model_CM_plot,
        LOG10=FALSE,  
        signal.col=NULL,
        chr.den.col=NULL,
-       # threshold=c(log10(sig_threshold[[1]]), -log10(sig_threshold[[1]])),
-       # threshold.lty=2, 
-       # threshold.lwd=1, 
-       # threshold.col="black", 
        highlight=cpg.highlight,
        highlight.text=genes.highlight, 
        file="jpg",
@@ -1560,8 +1436,6 @@ raw_100_vec = as.numeric(raw_100$p_val)
 names(raw_100_vec) = raw_100$cpg_name
 
 res1 = methylglm(cpg.pval = raw_100_vec, GS.type = "KEGG",array.type="EPIC")
-#write_rds(res1,"res1.rds")
-#res1 = read_rds("res1.rds")
 res2 = methylglm(cpg.pval = raw_100_vec, GS.type = "GO",array.type="EPIC")
 
 res1$term = "KEGG"
@@ -1577,6 +1451,7 @@ write.csv(res_total,paste0(varName,"_pathways_top_100.csv"))
 # module load gcc/8.3.0  
 # module load openblas/0.3.8
 # module load r/4.0.0
+
 setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
 library(tidyverse)
 library(data.table)
@@ -1692,6 +1567,7 @@ if(file.exists("resu_ipdmr.csv")){
 
 ####################################
 ###gene look up
+
 setwd("/project/wiemels_494/sebastian/eyeDisease/methyl")
 library(tidyverse)
 library(data.table)
@@ -1820,9 +1696,6 @@ methyl1 = methyl[,rownames(covs1)]
 
 if(identical(rownames(covs1),colnames(methyl1))==TRUE){
 
-  # methylt = methyl1[1:100,] 
-  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
-  
   results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
   results <- as.data.frame(results) %>%
     na.omit() %>%
@@ -1851,9 +1724,6 @@ methyl1 = methyl[,rownames(covs1)]
 
 if(identical(rownames(covs1),colnames(methyl1))==TRUE){
 
-  # methylt = methyl1[1:100,] 
-  # results = t(apply(methylt,1,linear,varName,covs1))
-  
   results <- t(parApply(cl, methyl1, 1, linear, varName, covs1)) 
   results <- as.data.frame(results) %>%
     na.omit() %>%
@@ -1930,8 +1800,6 @@ annoEPIC <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19 %>%
 
 for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
   
-   #varName="hyperopia_bg3.case.only"
-  
   if(varName=="hyperopia_b2") filename=paste0(varName,".ewas.logistic.txt")
   if(varName=="hyperopia_bg3") filename=paste0(varName,".ewas.linear.txt")
   if(varName=="hyperopia_bg3.case.only") filename=paste0(varName,".ewas.logistic.txt")
@@ -1965,33 +1833,6 @@ for(varName in c("hyperopia_b2","hyperopia_bg3","hyperopia_bg3.case.only")){
   print(results[1,])
   
 }
-
-# [1] "hyperopia_b2"
-# [1] 0.84
-#           cpg    Beta      SE        Z            P ncase ncontrol   chr
-# 1: cg02286589 22.6601 5.15933 4.392062 1.122806e-05   109      761 chr16
-#        pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
-# 1: 1556286            S_Shore             TELO2        NA               Body
-#    CpG_maf Regulatory_Feature_Group       fdr bf
-# 1:      NA                          0.9999915  1
-
-# [1] "hyperopia_bg3"
-# [1] 0.81
-#          cpg      Beta        SE        t            P    N  chr       pos
-# 1: cg17122694 -3.721569 0.7088069 -5.25047 1.787799e-07 1257 chr1 222801447
-#    Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group CpG_maf
-# 1:            OpenSea              MIA3        NA               Body      NA
-#    Regulatory_Feature_Group       fdr        bf
-# 1:                          0.1147149 0.1147149
-
-# [1] "hyperopia_bg3.case.only"
-# [1] 1.11
-#           cpg      Beta       SE         Z           P ncase ncontrol  chr
-# 1: cg21699194 -68.68683 14.14484 -4.855963 1.19803e-06   109      387 chr2
-#         pos Relation_to_Island UCSC_RefGene_Name Probe_maf UCSC_RefGene_Group
-# 1: 67791398            OpenSea                    0.015096                   
-#    CpG_maf Regulatory_Feature_Group       fdr        bf
-# 1:      NA                          0.7687207 0.7687207
 
 ####################################
 # pathway analysis 
@@ -2335,10 +2176,6 @@ weights = ifelse( training.y==0, frac1, frac0 )
 cv_model <- cv.glmnet(training.x, training.y, weights=weights,alpha = 1)
 best_lambda <- cv_model$lambda.min
 
-#png("cv_model_tuning.png")
-#plot(cv_model) 
-#dev.off()
-
 lasso_model <- glmnet(training.x, training.y, alpha = 1, weights=weights, lambda = best_lambda)
 lasso_model$beta
 write_rds(lasso_model,"lasso_model.rds")
@@ -2396,70 +2233,35 @@ logistic.fun <- function(meth, var, cov){
   return(out) 
   }
 
-# #linear <- function(meth,cov){
-#   methDF = meth %>% as.numeric()
-#   dat <- data.frame(y = methDF, cov)
-#   ff  <- formula(paste("y ~ ", paste0(colnames(cov),collapse="+")))
-#   mod <- try(lm(ff, data = dat),silent = TRUE)
-#   N <- sum(!is.na(dat[,1]))
-#   if (class(mod)=="lm") {
-#     coefs = summary(mod)$coefficients
-#     coef = coefs[2,"Estimate"]
-#     SE = coefs[2,"Std. Error"]
-#     t.value = coefs[2,"t value"]
-#     p.value = coefs[2,"Pr(>|t|)"]
-#     out = c(coef, SE, t.value, p.value, N) 
-#   } else {
-#     out = c(rep(NA,4), N)
-#   }
-#   names(out) = c("Beta","SE", "t", "P", "N")
-#   return(out) 
-# }
-
-# a = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") 
-# table(a$raceg)
-#   1   2   3   4 
-# 368 172 819  93 
-
 varName="hyperopia_b"
 
-
 for(racenum in 1:4){
-#racenum=4
 
-covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
-  as.data.frame() %>%
-  filter(.data[[varName]]==1 | diseases==0) %>%
-  filter(raceg==racenum) %>%
-  mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
-  dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
-                CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
-                epi1,epi2,epi3) %>%
-  column_to_rownames(var="beadPosition") %>%
-  na.omit() 
+  covs1 = read_rds("/project/wiemels_494/sebastian/eyeDisease/codes/sub.phenotypes.clinical.rds") %>% 
+    as.data.frame() %>%
+    filter(.data[[varName]]==1 | diseases==0) %>%
+    filter(raceg==racenum) %>%
+    mutate(EPIC_Plate = as.factor(EPIC_Plate)) %>%
+    dplyr::select(beadPosition,one_of(varName),gender,EPIC_Plate,
+                  CD8T,CD4T,NK,Bcell,Mono,Gran,nRBC,
+                  epi1,epi2,epi3) %>%
+    column_to_rownames(var="beadPosition") %>%
+    na.omit() 
 
-methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
-methyl1 = methyl[,rownames(covs1)]
-
-if(identical(rownames(covs1),colnames(methyl1))==TRUE){
-
-  # methylt = methyl1[which(rownames(methyl1)=='cg00002186'),,drop=FALSE]
-  # results = t(apply(methylt,1,logistic.fun,varName,covs1))
-  # plot(methylt[1,],covs1$hyperopia_b)
-  # dat <- data.frame(meth = methylt[1,], covs1) %>% dplyr::select(one_of(varName),meth,everything())
-  # ff  <- formula(paste(varName," ~ ", paste0(colnames(dat)[-1], collapse="+")))
-  # mod <- try(glm(ff, data = dat, family=binomial))
-  # cf = try(summary(mod)$coefficients)
+  methyl = read_rds("/project/wiemels_494/sebastian/eyeDisease/methyl/eye.methyl.sesame.imputed.rds")
+  methyl1 = methyl[,rownames(covs1)]
   
-  results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
-  results <- as.data.frame(results) %>%
-    na.omit() %>%
-    rownames_to_column(var="cpg")
+  if(identical(rownames(covs1),colnames(methyl1))==TRUE){
   
-  write.table(results,paste0(varName,".race.",racenum,".ewas.lm.txt"),
-        quote=FALSE,
-        row.names = FALSE,
-        sep='\t')  
+    results <- t(parApply(cl, methyl1, 1, logistic.fun, varName, covs1)) 
+    results <- as.data.frame(results) %>%
+      na.omit() %>%
+      rownames_to_column(var="cpg")
+    
+    write.table(results,paste0(varName,".race.",racenum,".ewas.lm.txt"),
+          quote=FALSE,
+          row.names = FALSE,
+          sep='\t')  
 }}
 
 stopCluster(cl)

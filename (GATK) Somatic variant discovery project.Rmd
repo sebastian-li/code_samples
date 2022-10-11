@@ -789,7 +789,6 @@ set -x
 set -u
 set -o pipefail
 
-
 cd /scratch1/lishaobo/smoking_temp
 
 ref=/project/desmith_488/sebastian/gatk/refs/GATK_resource_bundle/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta    

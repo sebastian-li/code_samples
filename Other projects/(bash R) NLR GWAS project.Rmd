@@ -7,8 +7,8 @@ editor_options:
 
 Project description: GWAS on the associations between neutrophil/lymphocyte ratio and SNPs
 
-
 ```{r create a master file for all subject's information}
+
 library(tidyverse)
 library(data.table)
 library(RNOmni)
@@ -195,7 +195,8 @@ cd /ccls/home/sli/GWAS/NLR
 
 ```  
 
-```{r visualization}
+```{r visualization, manhattan plot and qq plots}
+
 setwd("/ccls/home/sli/GWAS/NLR")
 
 library(tidyverse)
@@ -242,22 +243,11 @@ for(i in files){
   qq(gwas_data_1$P)
   dev.off()
 }
-# 
-# [1] "lambda value of ccls.set1.eur.NLR.PHENO1.glm.linear is: 1.02173424958845"
-# [1] "lambda value of ccls.set2.eur.NLR.PHENO1.glm.linear is: 0.999482221583302"
-# [1] "lambda value of ccls.set3.eur.NLR.PHENO1.glm.linear is: 0.962219814932119"
-# [1] "lambda value of ccls.set4.eur.NLR.PHENO1.glm.linear is: 1.00340539669486"
-# [1] "lambda value of ccls.set1.lat.NLR.PHENO1.glm.linear is: 1.00326041397532"
-# [1] "lambda value of ccls.set2.lat.NLR.PHENO1.glm.linear is: 1.00095677039124"
-# [1] "lambda value of ccls.set3.lat.NLR.PHENO1.glm.linear is: 0.998125728132205"
-# [1] "lambda value of ccls.set4.lat.NLR.PHENO1.glm.linear is: 0.998284149665314"
-# [1] "lambda value of meta.ccls.NLR.TBL is: 1.00280218184321"
 
 ```
 
-some hits in chr 1, do a locus zoom plot
 
-```{bash locus zoom}
+```{bash locus zoom,some hits in chr 1, do a locus zoom plot}
 
 cd /ccls/home/sli/GWAS/NLR
 
@@ -345,8 +335,10 @@ cd /ccls/home/sli/GWAS/NLR
 
 ```      
 
-```{bash}
-# running locuszoom on eur, lat and both
+locuszoom on eur, lat and both
+
+```{bash locuszoom on eur, lat and both}
+
 ## both
 cd /ccls/home/sli/GWAS/NLR
 # chr1:199150288:G:T has the smallest p value in all subjects
@@ -373,7 +365,7 @@ plink --bfile /ccls/home/sli/GWAS/bcell/ccls.$race\
 ```  
 
 ```{python}  
-## python3 script
+
 f=open('nlr.both.ld')
 f.readline()
 o=open('nlr.both.ld_lz','w')
@@ -498,6 +490,6 @@ write.csv(metalu, paste0(var,".meta.lookup.gene.csv"))
 
 metalu = read.csv(paste0(var,".meta.lookup.gene.csv"))
 mean(metalu$P<0.05)
-# 0.05325952
+
 ```
 

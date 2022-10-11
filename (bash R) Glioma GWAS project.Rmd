@@ -14,22 +14,6 @@ Step 1: choosing subjects to include in the analysis
 ```{bash New samples QC}
 
 cd /scratch/lishaobo/GWAS/glioma/saxb4
-#cd /project/wiemels_494/sebastian/glioma_gwas
-
-# cp /project/wiemels_494/publicRaws/PRO100497_USC497_SAX_b04/PLINK.zip .
-## Manipulate text for plink to work
-
-#awk ' !( ($1 >=1  && $1 <=22) || $1 ~/^\#/ || $1  ~/^X/ || $1  ~/^Y/ ) {next} 1'  /project/wiemels_494/publicRaws/PRO100497_USC497_SAX_b04/AxiomGT1.calls.vcf > AxiomGT1.calls.1.vcf
-#grep ^X  AxiomGT1.calls.1.vcf | head
-#grep ^X /project/wiemels_494/publicRaws/PRO100497_USC497_SAX_b04/AxiomGT1.calls.vcf | head
-
-#  Convert to plink bfile
-# plink --vcf AxiomGT1.calls.1.vcf \
-#   --biallelic-only \
-#   --snps-only 'just-acgt' \
-#   --make-bed \
-#   --out saxb4
-# 809367 variants and 6948 people pass filters and QC.
 
 plink --vcf /project/wiemels_494/publicRaws/PRO100497_USC497_SAX_b04/AxiomGT1.calls.vcf \
   --allow-extra-chr \
@@ -46,18 +30,15 @@ plink --vcf /project/wiemels_494/publicRaws/PRO100497_USC497_SAX_b04/AxiomGT1.ca
 ```
 
 ```{r pick subjects to add and subjects to swap}
-#setwd("/scratch/lishaobo/GWAS/glioma/saxb4")
+
 setwd("/project/wiemels_494/sebastian/glioma_gwas")
 library(tidyverse)
 library(data.table)
-# load subjects from the 2st batch of sequencing
-# batch2 = fread("saxb4.fam")%>%
-#   dplyr::rename("FID"="V1", "IID"="V2")%>%
-#   mutate(IID = paste0(FID,"_",IID), FID=0)
-# write.table(batch2,"saxb4.fam", sep = "\t", row.names = FALSE, col.names=FALSE,quote = FALSE)
+
 batch2 = fread("saxb4.fam")%>%
   dplyr::rename("FID"="V1", "IID"="V2")%>%
-  select(FID,IID) 
+  dplyr::select(FID,IID) 
+
 # load all subjects
 glio2 = fread("/project/wiemels_260/sebastian/gwas_glioma/raw_data/B2SampleAttributes.txt") %>% 
   as.data.frame() %>%
@@ -153,12 +134,6 @@ glio2Fam_plink = glio2Fam %>%
   mutate(faID=0, moID=0) %>%
   select(FID,IID,faID,moID,sex,phenotype)
 
-#backup original fam file
-#glio2FamOri = fread("saxb4_incl.fam")
-#write.table(glio2FamOri,"saxb4_incl.fam.backup", sep = "\t", row.names = FALSE, col.names=FALSE,quote = FALSE)
-#write.table(glio2Fam,"/project/wiemels_260/sebastian/gwas_glioma/saxb4/rawSampleAttributes.txt", sep = "\t", row.names = FALSE, col.names=TRUE,quote = FALSE)
-#write.table(glio2Fam_plink,"saxb4_incl.fam", sep = "\t", row.names = FALSE, col.names=FALSE,quote = FALSE)
-
 ```
 
 Step 2: annotate different sub-groups for meta-analysis subtypes to
@@ -230,42 +205,10 @@ glioS$WHO_jon[which(glioS$HISTO_T3==9451)]
 
 # assigning subgroup labels for each subjects, with control being 9
 
-# all glioma is just everyone so no biggie
-
-# LGG (WHO I-II): lgg
-## (HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442)) AND
-## (WHO_jon %in% c(1,2))
-
-# HGG (WHO III-IV): hgg
-## (HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442)) AND
-## (WHO_jon %in% c(3,4))
-
-# LG astrocytoma (WHO I-II): lga
-## (HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442)) AND
-## (WHO_jon %in% c(1,2))
-
-# HG astrocytoma (WHO III-IV): hga
-## (HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442)) AND
-## (WHO_jon %in% c(3,4))
-
-# PA: pa
-## (HISTO_T3 == 9421) 
-
-# PA Optic pathway: pao
-## (HISTO_T3 == 9421|SITE_02=="C723")
-
-# Glioblastoma: glm
-## (HISTO_T3 == 9440) 
-
-# All astrocytoma: ast
-#(HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442)
-
-
 glioS1 = glioS %>%
   mutate(ast = ifelse((!is.na(HISTO_T3) & HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442),1,ifelse(phenotype==1,9,NA)))
 table(glioS1$ast,useNA="always")
  
-
 glioS1 = glioS %>%
   mutate(lgg = ifelse(
     WHO_jon %in% c(1,2),1,ifelse(phenotype==1,9,NA)),
@@ -300,10 +243,7 @@ glioS1 = glioS %>%
                             ifelse(race%in%c("Black","Black_ME"),"blk",
                                    ifelse(race %in%c("White","White_ME"),"eur",
                                           ifelse(race=="Hispanic","lat",race)))))
-  
-# 6582   20
 fwrite(glioS1, "/project/wiemels_494/sebastian/glioma_gwas/eur_meta_variables.txt")
-#glioS1 = fread("/project/wiemels_494/sebastian/glioma_gwas/eur_meta_variables.txt")
 
 glioS1.subjects.collab = glioS1 %>%
   dplyr::select(FID,IID)
@@ -362,120 +302,6 @@ glioS1_w_case = glioS1 %>%
   
 write.table(glioS1_w_control,"/project/wiemels_494/sebastian/glioma_gwas/white_control.txt", sep = "\t", row.names = FALSE, col.names=FALSE,quote = FALSE)
 write.table(glioS1_w_case,"/project/wiemels_494/sebastian/glioma_gwas/white_case.txt", sep = "\t", row.names = FALSE, col.names=FALSE,quote = FALSE)
-
-
-###
-# outputting and tabulating for european collaborators
-
-# a=fread("EUR_ids.txt") %>% select(V1,V2) %>%
-#   inner_join(glioS,by=c("V2"="IID"))
-# b=fread("LAT_ids.txt") %>% select(V1,V2) %>%
-#   inner_join(glioS,by=c("V2"="IID"))
-# c=fread("AFR_ids.txt") %>% select(V1,V2) %>%
-#   inner_join(glioS,by=c("V2"="IID"))
-# d=fread("EAS_ids.txt") %>% select(V1,V2) %>%
-#   inner_join(glioS,by=c("V2"="IID"))
-# 
-# 
-# enquery = glioS # for all subjects
-# #enquery1 = enquery %>% filter(status=="case") %>% dplyr::select(`Sample Filename`,WHO_jon,blindid)
-# #write.csv(enquery1,"glio.all.1215.csv")
-# 
-# enquery = a # for european subjects 
-# enquery = b # for latino subjects 
-# enquery = c # for african subjects 
-# enquery = d # for east asian subjects 
-# enquery = glioS %>% filter(AGE<=5)
-# 
-# ## all glioma
-# enquery = enquery %>%
-#   mutate(ageGroup=ifelse(AGE>=0&AGE<=4,"1_0-4",
-#                          ifelse(AGE>=5&AGE<=9,"2_5-9",
-#                                 ifelse(AGE>=10&AGE<=14,"3_10-14","4_others"))))
-# all.glios = enquery %>% filter(status=="case") 
-# table(all.glios$ageGroup)
-# nrow(all.glios)
-# 
-# #DIFFERN2 (1988 - 2017)
-# #GRADECLIN (2018 – )
-# #https://www.naaccr.org/wp-content/uploads/2021/03/Grade-Manual_v-2.01.pdf (page 185, Grade 24)
-# # SUMSTAGE (https://cspedia.usc.edu/Tumor-Diagnostic_Staging/SUMSTAGE.htm)
-# #0  In situ
-# #1  Localized (including micro-invasive)
-# #2  Regional, extension only
-# #3  Regional, nodes only
-# #4  Regional, extension and nodes
-# #5  Regional, NOS
-# #7  Distant
-# #8  Blank - not abstracted
-# #9  Unknown
-# 
-# # tb1=table(enquery$DIFFERN2)
-# # tb2=table(enquery$HISTO_T3)
-# # tb3=table(enquery$SITE_02)
-# # write.csv(tb1,"tb1.csv")
-# # write.csv(tb2,"tb2.csv")
-# # write.csv(tb3,"tb3.csv")
-# 
-# ## LGG (WHO I-II)
-# ## HGG (WHO III-IV)
-# # table(enquery$DIFFERN2,enquery$ageGroup)
-# # table(enquery$DIFFERN2)
-# 
-# tbl_grade_age = table(enquery$WHO_jon,enquery$ageGroup)
-# tbl_grade = table(enquery$WHO_jon)
-# 
-# tbl_grade_age["1",] + tbl_grade_age["2",]
-# sum(tbl_grade["1"]+tbl_grade["2"])
-# 
-# tbl_grade_age["3",] + tbl_grade_age["4",]
-# sum(tbl_grade["3"]+tbl_grade["4"])
-# 
-# ##  All astrocytoma	
-# #some additional codes should be added, including subependymal giant cell astrocytoma (9384) and glioblastoma (9440), giant cell glioblastoma (9441) and gliosarcoma (9442) 
-# 
-# temp = enquery %>% 
-#   dplyr::filter((HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442))
-# table(temp$ageGroup)
-# nrow(temp)
-# 
-#  
-# ## LG  astrocytoma (WHOI-II)	
-# temp = enquery %>%
-#   dplyr::filter((HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442))%>%
-#   dplyr::filter(WHO_jon %in% c(1,2))
-# table(temp$ageGroup)
-# nrow(temp)
-# 
-# ## HG astrocytoma (WHO III-IV)	
-# temp = enquery %>%
-#   dplyr::filter((HISTO_T3 >= 9400 & HISTO_T3 <= 9424)| HISTO_T3 %in% c(9440,9441,9442))%>%
-#   dplyr::filter(WHO_jon %in% c(3,4))
-# table(temp$ageGroup)
-# nrow(temp)
-# 
-# ## Pilocytic astrocytoma	
-# temp = enquery %>% 
-#   dplyr::filter(HISTO_T3 == 9421) 
-# table(temp$ageGroup)
-# nrow(temp)
-# 
-# ## Pilocytic astrocytoma incl. optic pathway glioma	
-# temp = enquery %>% 
-#   dplyr::filter(HISTO_T3 == 9421|SITE_02=="C723")
-# table(temp$ageGroup)
-# nrow(temp)
-# 
-# ## Glioblastoma
-# temp = enquery %>% dplyr::filter(HISTO_T3 == 9440) 
-# table(temp$ageGroup)
-# nrow(temp)
-
-#row1 = enquery %>% dplyr::filter(HISTO_T3 == 9440)  %>% filter(DIFFERN2 %in% c(1,2,3)) %>% mutate(patho="Glioblastoma")
-#row2 = enquery %>% dplyr::filter(HISTO_T3 == 9421)  %>% filter(DIFFERN2 %in% c(2,3,4)) %>% mutate(patho="Pilocytic")
-#rows = rbind(row1,row2) %>% as.data.frame()
-#write.csv(rows,"gliomas.classification.csv")
-
 
 ```
 
@@ -1028,127 +854,6 @@ for(file in files){
   print(paste0("number of controls ",tbl['1']))
   print(paste0("number of cases ",tbl['2']))
 }
-
-# [1] "all.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 226"
-# [1] "all.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 194"
-# [1] "all.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 1554"
-# [1] "all.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 1176"
-# [1] "ast.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 115"
-# [1] "ast.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 103"
-# [1] "ast.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 841"
-# [1] "ast.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 589"
-# [1] "glm.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 9"
-# [1] "glm.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 4"
-# [1] "glm.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 46"
-# [1] "glm.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 40"
-# [1] "hga.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 21"
-# [1] "hga.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 21"
-# [1] "hga.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 152"
-# [1] "hga.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 128"
-# [1] "hgg.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 26"
-# [1] "hgg.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 26"
-# [1] "hgg.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 182"
-# [1] "hgg.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 151"
-# [1] "lga.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 80"
-# [1] "lga.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 66"
-# [1] "lga.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 607"
-# [1] "lga.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 380"
-# [1] "lgg.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 90"
-# [1] "lgg.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 81"
-# [1] "lgg.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 692"
-# [1] "lgg.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 438"
-# [1] "olg.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 2"
-# [1] "olg.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 6"
-# [1] "olg.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 47"
-# [1] "olg.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 28"
-# [1] "pa.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 59"
-# [1] "pa.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 56"
-# [1] "pa.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 468"
-# [1] "pa.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 302"
-# [1] "pao.Subs.asn.txt"
-# [1] "number of controls 222"
-# [1] "number of cases 64"
-# [1] "pao.Subs.blk.txt"
-# [1] "number of controls 196"
-# [1] "number of cases 60"
-# [1] "pao.Subs.eur.txt"
-# [1] "number of controls 1559"
-# [1] "number of cases 522"
-# [1] "pao.Subs.lat.txt"
-# [1] "number of controls 1177"
-# [1] "number of cases 337"
 ```
 
 ```{bash execution of GWAS}
@@ -1156,12 +861,7 @@ for(file in files){
 #cd /scratch/lishaobo/GWAS/glioma/saxb4
 cd /project/wiemels_494/sebastian/glioma_gwas/usc_cohort
 
-#mkdir temps
-
 # for all Glioma subjects
-
-#subtype="lga"
-# race='blk'
 
 for subtype in "all" "lgg" "hgg" "lga" "hga" "pa" "pao" "glm" "ast" "olg"; do
 
@@ -1262,10 +962,7 @@ done
 
 # liftOver to Hg19 (not necessary for non-USA cohorts)
 
-#cd /scratch/lishaobo/GWAS/glioma/saxb4
 cd /project/wiemels_494/sebastian/glioma_gwas/usc_cohort
-#subtype="all"
-#race="eur"
 
 for subtype in "all" "lgg" "hgg" "lga" "hga" "pa" "pao" "glm" "ast" "olg"; do
 
@@ -1284,14 +981,6 @@ for subtype in "all" "lgg" "hgg" "lga" "hga" "pa" "pao" "glm" "ast" "olg"; do
   done
 done
 
-#for subtype in "all" "lgg" "hgg" "lga" "hga" "pa" "pao" "glm" "ast" "olg"; do
-#  for race in "eur" "lat" "blk" "asn"; do
-#    cp /scratch/lishaobo/GWAS/glioma/saxb4/$subtype.Subs.$race.phenotype.glm.logistic.hybrid /project/wiemels_494/sebastian/glioma_gwas/usc_cohort
-#    cp /scratch/lishaobo/GWAS/glioma/saxb4/hg19.$subtype.Subs.$race.phenotype.glm.logistic.hybrid #/project/wiemels_494/sebastian/glioma_gwas/usc_cohort
-#    cp /scratch/lishaobo/GWAS/glioma/saxb4/$subtype.$race.hwe /project/wiemels_494/sebastian/glioma_gwas/usc_cohort
-#  done
-#done  
-    
 ```
 
 ```{r sigPCAs.R}
@@ -1302,10 +991,6 @@ done
 library(tidyverse)
 library(data.table)
 
-#setwd("/scratch/lishaobo/GWAS/glioma/saxb4")
-#pcaFile = "all.Subs.eur.pca.eigenvec"
-#phenotypeFile = "temps/all.Subs.eur.fam"
-#estithreshold = 0.5
 pthreshold=0.05
 
 pcaFile = commandArgs(trailingOnly=TRUE)[1]
@@ -2960,30 +2645,6 @@ for(i in files){
   
 }
 
-# [1] "lambda value of meta.eur.all.glioma.TBL is: 0.999533524250844"
-# [1] "lambda value of meta.four.races.all.glioma.TBL is: 0.994877463584719"
-# [1] "lambda value of meta.eur.lgg.glioma.TBL is: 0.94962461666587"
-# [1] "lambda value of meta.four.races.lgg.glioma.TBL is: 1.00186748706957"
-# [1] "lambda value of meta.eur.hgg.glioma.TBL is: 0.868180745391023"
-# [1] "lambda value of meta.four.races.hgg.glioma.TBL is: 0.954126957770219"
-# [1] "lambda value of meta.eur.ast.glioma.TBL is: 0.986074356310157"
-# [1] "lambda value of meta.four.races.ast.glioma.TBL is: 0.983306195744465"
-# [1] "lambda value of meta.eur.lga.glioma.TBL is: 0.941112090599992"
-# [1] "lambda value of meta.four.races.lga.glioma.TBL is: 0.990237175838761"
-# [1] "lambda value of meta.eur.hga.glioma.TBL is: 0.835294841000264"
-# [1] "lambda value of meta.four.races.hga.glioma.TBL is: 0.938435290964941"
-# [1] "lambda value of meta.eur.pa.glioma.TBL is: 0.971832636653243"
-# [1] "lambda value of meta.four.races.pa.glioma.TBL is: 0.991627609352945"
-# [1] "lambda value of meta.eur.pao.glioma.TBL is: 0.972289713831546"
-# [1] "lambda value of meta.four.races.pao.glioma.TBL is: 0.983767164684692"
-# [1] "lambda value of meta.eur.glm.glioma.TBL is: 0.752430490064976"
-# [1] "lambda value of meta.noanna.eur.glm.glioma.TBL is: 0.726343679176261"
-# [1] "lambda value of meta.four.races.glm.glioma.TBL is: 0.956383857091319"
-# [1] "lambda value of meta.noanna.four.races.glm.glioma.TBL is: 0.898929460700466"
-# [1] "lambda value of meta.eur.olg.glioma.TBL is: 0.97549359747585"
-# [1] "lambda value of meta.noanna.eur.olg.glioma.TBL is: 0.946930527000494"
-# [1] "lambda value of meta.four.races.olg.glioma.TBL is: 1.30382917243537"
-# [1] "lambda value of meta.noanna.four.races.olg.glioma.TBL is: 1.28284301407355"
 
 # for METAL, make y axis the same
 
@@ -3123,9 +2784,6 @@ do
   mv anno.log anno.$fileName.log
 done
 
-#tail -n +1 *input > all.significant.variants.results
-#tail -n +1 anno.variant* > sum.anno.variant.significant.results 
-#tail -n +1 anno.exonic.* > sum.anno.exonic.significant.results
 
 # metafor
 cd /project/wiemels_494/sebastian/glioma_gwas/meta/metafor

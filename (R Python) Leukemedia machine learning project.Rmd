@@ -141,7 +141,7 @@ install.packages("rJava", configure.args="CPPFLAGS='-I${BZIP2_ROOT}/include -I${
 install.packages("bartMachine")
 
 
-```{r}
+```{r running SuperLearner models}
 
 setwd("/project/wiemels_494/sebastian/ML/ALL")
 library(SuperLearner)
@@ -178,23 +178,6 @@ methyl = fread("setB.methyl.txt")%>%
 
 predictors = cbind(vars_pred,methyl) %>% as.data.frame()
 
-# Feature selection
-# library(parallel)
-# cl <- makeCluster(detectCores()-1, type="FORK")
-# 
-# listp <- parApply(cl,predictors, 2, function(x, Y) {
-#   corres = cor.test(x, y = Y, method = "pearson")
-#   return(c(p=corres$p.value,corres$estimate,variance=var(x)))
-#    }, Y = outcome)
-# 
-# listpDF = data.frame(listp) %>%
-#   t() %>%
-#   as.data.frame() %>%
-#   rownames_to_column(var="var") %>%
-#   arrange(p)
-# write_rds(listpDF,"feature_selection_res.rds")
-# stopCluster(cl)
-
 ################################################################
 # predict on new data (set 2, A)
 vars_val = fread("setA.variables.txt") %>%
@@ -210,9 +193,10 @@ methyl_val = fread("setA.methyl.txt")%>%
 
 predictors_val = cbind(vars_val_pred,methyl_val) %>% as.data.frame()
 
-# SuperLearner
+# Running SuperLearner
 # try at least the following models: glmnet, randomForest, XGBoost, SVM, and bartMachine
 ##  tested with multiple hyperparameter settings for each algorithm.
+
 setwd("/project/wiemels_494/sebastian/ML/ALL")
 library(SuperLearner)
 library(tidyverse)
